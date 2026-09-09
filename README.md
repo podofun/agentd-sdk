@@ -99,18 +99,3 @@ await probeReady('http://agentd:7777'); // false (503) while the daemon drains
 ```
 
 Both routes need no token. Use `probeReady` for container readiness checks.
-
-## Not covered
-
-The `/control` approvals plane, signed webhooks, browser transports, and automatic reconnection are out of scope for this package.
-
-## Develop
-
-```bash
-npm ci
-npm test              # builds, then runs node --test against a mock daemon
-npm pack --dry-run
-AGENTD_TEST_URL=http://127.0.0.1:7777 AGENTD_TEST_TOKEN=... npm test   # also runs the live test
-```
-
-Releases go out with `npm publish --access public --tag alpha`; stable versions use `latest`.

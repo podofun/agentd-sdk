@@ -1,8 +1,20 @@
 {
   "name": "@podofun/agentd-sdk",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Standalone TypeScript WebSocket client for agent.d",
+  "keywords": [
+    "agentd",
+    "agent.d",
+    "websocket",
+    "sdk"
+  ],
   "license": "MIT",
+  "author": "podofun",
+  "homepage": "https://github.com/podofun/agentd-sdk#readme",
+  "repository": "github:podofun/agentd-sdk",
+  "bugs": {
+    "url": "https://github.com/podofun/agentd-sdk/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
