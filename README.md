@@ -2,7 +2,11 @@
 
 Standalone TypeScript client for the [agent.d](https://github.com/podofun/agent.d) WebSocket API. It talks to a daemon over `/ws` and has no dependency on `agentd`, `agentctl`, Cargo, or local daemon files, so your app and the daemon can live on different hosts or containers.
 
-Requires Node.js 22 or newer. Targets the agent.d `0.8.3-alpha` protocol. The package is `@podofun/agentd-sdk` and is not published yet; until then run `npm install && npm pack` here and install the tarball.
+Requires Node.js 22 or newer. Targets the agent.d `0.8.3-alpha` protocol.
+
+```bash
+npm install @podofun/agentd-sdk@alpha
+```
 
 ## Quick start
 
@@ -109,4 +113,4 @@ npm pack --dry-run
 AGENTD_TEST_URL=http://127.0.0.1:7777 AGENTD_TEST_TOKEN=... npm test   # also runs the live test
 ```
 
-Publish with `npm publish --access public --tag alpha` after bumping the version; use `latest` for stable releases. Publishing the SDK does not publish or install the daemon.
+Releases go out with `npm publish --access public --tag alpha`; stable versions use `latest`.
