@@ -2,16 +2,23 @@ import { Connection, toError, validateTimeout, type RequestOptions } from './con
 import type {
   ActionResult,
   CallerIdentity,
+  DeleteResult,
+  ListSessionsParams,
+  NewSessionParams,
   RunParams,
   RunnerComposition,
   RunnerDelta,
   RunnerOutcome,
   RunnerSummary,
   ServiceStatus,
+  Session,
+  SessionMeta,
+  SessionRef,
   SkillDef,
   SkillSummary,
 } from './protocol.js';
 import { resolveWsUrl } from './url.js';
+import { isAgentdError } from './errors.js';
 
 export interface ClientOptions {
   /** Where the daemon lives. A plain base URL like `http://agentd:7777` is enough; we add `/ws` for you. Defaults to the local daemon. */
@@ -47,10 +54,11 @@ function compact<T extends object>(value: T): T {
  * rather fail fast at startup.
  */
 export class AgentdClient {
-  private readonly connection: Connection;
+  /** Hard-private so the socket and its token never surface through logging or serialisation. */
+  readonly #connection: Connection;
 
   constructor(options: ClientOptions = {}) {
-    this.connection = new Connection({
+    this.#connection = new Connection({
       url: resolveWsUrl(options.url),
       token: options.token,
       connectTimeoutMs: validateTimeout(options.connectTimeoutMs ?? 30_000, 'connectTimeoutMs'),
@@ -60,12 +68,12 @@ export class AgentdClient {
 
   /** Connect right away instead of waiting for the first request. Handy for surfacing bad URLs or tokens at startup. */
   connect(): Promise<void> {
-    return this.connection.connect();
+    return this.#connection.connect();
   }
 
   /** Hang up. Anything still in flight rejects. Make a new client if you need to talk to the daemon again. */
   close(): void {
-    this.connection.close();
+    this.#connection.close();
   }
 
   /** Ask the daemon if it is alive. Resolves to the string `"ok"`. */
@@ -75,7 +83,7 @@ export class AgentdClient {
 
   /** Escape hatch: send any protocol method by name and get the raw `result` back. Reach for the typed namespaces first. */
   request<T = unknown>(method: string, params: unknown = {}, options?: RequestOptions): Promise<T> {
-    return this.connection.request<T>(method, params, options);
+    return this.#connection.request<T>(method, params, options);
   }
 
   readonly tools = {
@@ -103,13 +111,56 @@ export class AgentdClient {
       this.request('runners.inspect', { name }, options),
     /** Run a runner and wait for the whole answer. Aborting or timing out asks the daemon to stop the run too. */
     run: (params: RunParams, options?: RequestOptions): Promise<RunnerOutcome> =>
-      this.connection.request('runners.run', compact({ ...params, stream: false }), {
+      this.#connection.request('runners.run', compact({ ...params, stream: false }), {
         ...options,
         runner: true,
       }),
     /** Run a runner and watch the answer arrive. Iterate for deltas, then await `.result` for the finished outcome. */
     stream: (params: RunParams, options: RequestOptions = {}): RunnerStream =>
       this.openStream(params, options),
+  };
+
+  /**
+   * Chat sessions the daemon keeps history for. Create one, then pass its `id` as `session_id`
+   * to `runners.run` or `runners.stream`; the daemon loads the conversation so far, answers, and stores the exchange.
+   *
+   * Every session is owned by the interface your token belongs to, and by the `user` you passed when
+   * creating it. Pass the same `user` on every later call for that session; without it the session
+   * looks like it does not exist.
+   */
+  readonly sessions = {
+    /** Start a session. Give it a `label` (your chat id, say) when you want to find it again without keeping the uuid. */
+    create: (params: NewSessionParams = {}, options?: RequestOptions): Promise<SessionMeta> =>
+      this.request('sessions.create', compact(params), options),
+    /** One session with all its stored turns, by daemon `id` or by your `label`. Rejects with `session_not_found` when there is none you may see. */
+    get: (ref: SessionRef, options?: RequestOptions): Promise<Session> =>
+      this.request('sessions.get', compact(ref), options),
+    /** The `label`'s session if it exists for this caller, otherwise a fresh one with that label. The call most chat bridges want on every incoming message. */
+    open: async (
+      label: string,
+      params: Omit<NewSessionParams, 'label'> = {},
+      options?: RequestOptions,
+    ): Promise<SessionMeta> => {
+      const { session, user } = params;
+      try {
+        return await this.sessions.get({ label, session, user }, options);
+      } catch (error) {
+        if (!isAgentdError(error, 'session_not_found')) throw error;
+      }
+      try {
+        return await this.sessions.create({ ...params, label }, options);
+      } catch (error) {
+        // Someone else created it between our two calls; theirs wins.
+        if (!isAgentdError(error, 'session_label_taken')) throw error;
+        return this.sessions.get({ label, session, user }, options);
+      }
+    },
+    /** Sessions this caller may see, newest first. */
+    list: (params: ListSessionsParams = {}, options?: RequestOptions): Promise<SessionMeta[]> =>
+      this.request('sessions.list', compact(params), options),
+    /** Remove a session and every turn in it. `deleted: false` when there is none this caller may see. */
+    delete: (id: string, identity: CallerIdentity = {}, options?: RequestOptions): Promise<DeleteResult> =>
+      this.request('sessions.delete', compact({ id, ...identity }), options),
   };
 
   readonly skills = {
@@ -140,7 +191,7 @@ export class AgentdClient {
       wake = undefined;
     };
 
-    const result = this.connection
+    const result = this.#connection
       .request<RunnerOutcome>('runners.run', compact({ ...params, stream: true }), {
         timeoutMs: options.timeoutMs,
         signal: controller.signal,

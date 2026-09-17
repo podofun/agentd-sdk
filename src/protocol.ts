@@ -1,5 +1,5 @@
 /**
- * The shapes that travel over the wire between you and agent.d 0.8.3-alpha.
+ * The shapes that travel over the wire between you and agent.d 0.10.0-alpha.
  *
  * These mirror the daemon's Rust structs field for field, snake_case included, so what you
  * see here is exactly what the daemon sends and expects. Treat this file as the protocol reference.
@@ -29,6 +29,11 @@ export type ErrorCode =
   | 'provider_upstream'
   | 'compose_failed'
   | 'serialize_failed'
+  | 'session_not_found'
+  | 'session_busy'
+  | 'session_label_taken'
+  | 'session_store'
+  | 'sessions_unavailable'
   | (string & {});
 
 export interface RequestFrame {
@@ -114,15 +119,18 @@ export interface Message {
 }
 
 /**
- * What you send to run a runner. Give it a `prompt`, a `messages` history, or both.
+ * What you send to run a runner. Give it a `prompt`, a `messages` history you manage yourself,
+ * or a `session_id` so the daemon manages the history for you. `messages` and `session_id` are exclusive.
  * The daemon is strict about keys here, so unknown fields fail the call with `bad_params`.
  */
 export interface RunParams extends CallerIdentity {
   name: string;
-  /** The user's message. Required unless you pass history; goes after the history if you pass both. */
+  /** The user's message. Required unless you pass history; goes after the history if you pass both. Always required with `session_id`. */
   prompt?: string;
-  /** Prior conversation, up to 256 messages. The daemon keeps no history of its own, so send it every time. */
+  /** Prior conversation, up to 256 messages, when you keep history on your side. Cannot be combined with `session_id`. */
   messages?: Message[];
+  /** A session from `sessions.create`. The daemon loads its turns as history and stores this exchange afterwards. */
+  session_id?: string;
   /** Extra instructions tacked onto the runner's own system prompt for this call. */
   system?: string;
   /** Use a different model just this once. The runner still needs a grant for that model's provider. */
@@ -145,6 +153,8 @@ export interface RunnerOutcome {
   provider: string;
   model: string | null;
   stop_reason: string | null;
+  /** Echoes the session this run was appended to. Absent for runs without one. */
+  session_id?: string;
   /** Token counts for the run. Missing if any model turn failed to report usage, rather than padded with zeros. */
   usage?: Usage;
 }
@@ -164,6 +174,59 @@ export interface RunnerComposition extends RunnerSummary {
 export interface CancelResult {
   /** True if the daemon delivered the cancel. False if the run had already finished, never existed, or was already being cancelled. */
   cancelled: boolean;
+}
+
+// ---- sessions ----
+
+/**
+ * `sessions.create`. The session is owned by the interface your token belongs to, and by `user`
+ * when you pass one: from then on only calls carrying that same `user` can see it.
+ */
+export interface NewSessionParams extends CallerIdentity {
+  /** Your own id for the session: a chat id, a ticket number. Unique per interface; reuse fails with `session_label_taken`. */
+  label?: string;
+  /** Which runner this session is for. Informational only; any runner can run against any session. */
+  runner?: string;
+}
+
+/** `sessions.list`. */
+export interface ListSessionsParams extends CallerIdentity {
+  /** Defaults to 50 on the daemon, caps at 500. */
+  limit?: number;
+}
+
+/** Everything about a session except its turns. */
+export interface SessionMeta {
+  /** Daemon-minted uuid. This is what `RunParams.session_id` takes. */
+  id: string;
+  /** `interface:<name>` of the token that created it, or `service:<name>` for sessions Lua services create. */
+  owner: string;
+  label?: string;
+  /** The end user the creating call vouched for. Only calls carrying the same `user` can see the session. */
+  user?: string;
+  runner?: string;
+  /** Unix seconds. */
+  created_at: number;
+  updated_at: number;
+  /** Turns currently stored, after any compaction. */
+  turn_count: number;
+  /** Next sequence number the daemon will assign; never reused after a compaction. */
+  next_seq: number;
+  /** How many times old turns were folded into a summary. */
+  compactions: number;
+}
+
+export interface Session extends SessionMeta {
+  /** The stored conversation, oldest first. After a compaction the first turn is a `[Conversation summary]`. */
+  turns: Message[];
+}
+
+/** Look a session up by the daemon's `id` or by the `label` you gave it, as the given caller. */
+export type SessionRef = CallerIdentity & ({ id: string; label?: never } | { label: string; id?: never });
+
+export interface DeleteResult {
+  /** False when there was nothing to delete. */
+  deleted: boolean;
 }
 
 // ---- skills / services ----

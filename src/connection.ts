@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import WebSocket from 'ws';
 import { AgentdError } from './errors.js';
 import { LIMITS, type ErrorFrame, type RunnerDelta } from './protocol.js';
@@ -79,7 +80,9 @@ function isErrorFrame(frame: Record<string, unknown>): frame is Record<string, u
  * duplicate while the first request is still running.
  */
 export class Connection {
-  private readonly options: ConnectionOptions;
+  /** Kept in a hard-private field so `console.log(client)`, `JSON.stringify(client)` and `util.inspect` never show it. */
+  readonly #token?: string;
+  private readonly options: Omit<ConnectionOptions, 'token'>;
   private socket?: WebSocket;
   private connecting?: Promise<void>;
   private rejectConnect?: (error: Error) => void;
@@ -90,10 +93,21 @@ export class Connection {
   constructor(options: ConnectionOptions) {
     validateTimeout(options.connectTimeoutMs, 'connectTimeoutMs');
     validateTimeout(options.timeoutMs, 'timeoutMs');
-    if (options.token !== undefined && (!options.token.trim() || /[\r\n]/.test(options.token))) {
+    const { token, ...rest } = options;
+    if (token !== undefined && (!token.trim() || /[\r\n]/.test(token))) {
       throw new TypeError('Invalid bearer token');
     }
-    this.options = options;
+    this.#token = token;
+    this.options = rest;
+  }
+
+  /** What debuggers and loggers see. The token is deliberately absent. */
+  [inspect.custom](): string {
+    return `Connection { url: ${JSON.stringify(this.options.url.href)}, token: ${this.#token === undefined ? 'none' : '[redacted]'} }`;
+  }
+
+  toJSON(): { url: string } {
+    return { url: this.options.url.href };
   }
 
   /** Open the socket. Safe to call repeatedly; concurrent callers share the same handshake. */
@@ -104,7 +118,7 @@ export class Connection {
     this.connecting = new Promise<void>((resolve, reject) => {
       this.rejectConnect = reject;
       const socket = new WebSocket(this.options.url, {
-        headers: this.options.token === undefined ? {} : { Authorization: `Bearer ${this.options.token}` },
+        headers: this.#token === undefined ? {} : { Authorization: `Bearer ${this.#token}` },
         handshakeTimeout: this.options.connectTimeoutMs,
         followRedirects: false,
         maxPayload: LIMITS.maxMessageBytes,
