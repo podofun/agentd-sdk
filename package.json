@@ -35,7 +35,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "test": "npm run build && node --test test/*.test.mjs",
+    "test": "npm run build && tsc -p test/types/tsconfig.json && node --test test/*.test.mjs",
     "prepack": "npm run lint && npm run build"
   },
   "dependencies": {
