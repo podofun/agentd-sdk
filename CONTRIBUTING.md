@@ -1,28 +1,34 @@
 # Contributing
 
+Thanks for helping with the SDK. Install the dependencies, then run the linter and the tests:
+
 ```bash
 npm ci
 npm run lint
 npm test
 ```
 
-Tests run against a mock daemon; no agent.d binaries are needed. `npm test` also type-checks `test/types/protocol.ts` against the built declarations, so a change to the public types that breaks callers fails there.
+`npm test` needs no agent.d install. It also checks that the public types still compile for code that uses them.
 
-To exercise a real daemon, point `AGENTD_BIN` at an `agentd` binary before `npm test`. The live tests start it on a free port in a throwaway home, with its own `config.toml`, `init.lua`, `grants.toml`, trace file and XDG folders, so your own daemon and its data are never touched. No model provider is needed: a small fake OpenAI-compatible endpoint stands in for one, which is how streaming, tool results and cancellation get covered end to end. Set `AGENTD_CWD_BIN` as well to test session folders against a daemon that supports them.
+## Testing against a real daemon
+
+Some tests start a real agent.d daemon. They run when you point `AGENTD_BIN` at an `agentd` binary:
 
 ```bash
-AGENTD_BIN=/path/to/agentd AGENTD_CWD_BIN=/path/to/agentd npm test
+AGENTD_BIN=/path/to/agentd npm test
 ```
 
-You can also run the smaller check against a daemon you manage yourself by setting `AGENTD_TEST_URL` and `AGENTD_TEST_TOKEN`.
+These tests start their own daemon on a free port, with its own settings, and leave your own daemon and its data alone. They need no model provider or API key. To include the session folder tests, set `AGENTD_CWD_BIN` to the same binary.
 
-CI runs lint, tests, and a pack dry run on Linux, macOS, and Windows for every push and pull request.
+To run a smaller check against a daemon you already have running, set `AGENTD_TEST_URL` and `AGENTD_TEST_TOKEN` instead.
+
+Every push and pull request runs the linter and the tests on Linux, macOS and Windows.
 
 ## Releasing
 
-Bump `version` in `package.json`, then:
+Set the new `version` in `package.json`, then publish:
 
 ```bash
 npm publish --access public --tag alpha   # pre-releases
-npm publish --access public               # stable
+npm publish --access public               # stable releases
 ```

@@ -1,8 +1,12 @@
 # agentd-sdk
 
-Connect your application to [agent.d](https://github.com/podofun/agent.d) to run tasks and build conversations with your agents. The SDK gives you a TypeScript API for calling actions, running agents, streaming replies and managing conversation history.
+The agentd SDK connects your TypeScript or JavaScript application to [agent.d](https://github.com/podofun/agent.d). Use it to call actions, run agents, stream their replies, keep conversations, and answer the approval questions agents ask.
 
-You will mainly work with three things: an **action** performs a specific operation, such as checking a Git repository; a **runner** uses a model to respond to a prompt and can call permitted actions along the way; a **session** keeps the conversation available for later replies.
+Three ideas come up throughout this guide:
+
+- An **action** does one specific job, such as checking a Git repository.
+- A **runner** is an agent. It uses a model to answer a prompt, and it can call the actions it is allowed to use.
+- A **session** is a conversation. It keeps the earlier messages, so a runner can answer follow-up questions.
 
 ## Installation
 
@@ -14,11 +18,15 @@ npm install @podofun/agentd-sdk@alpha
 
 ## Your first request
 
-Start by checking which actions and runners your daemon has loaded. Set `AGENTD_URL` to its address and `AGENTD_TOKEN` to the token your application uses to connect. The example defaults to a local daemon at `http://127.0.0.1:7777`.
+Start by listing the actions and runners your daemon has loaded. Set `AGENTD_URL` to the daemon's address and `AGENTD_TOKEN` to your application's token. Without `AGENTD_URL`, the example connects to a local daemon at `http://127.0.0.1:7777`.
 
-The token decides who your application is to the daemon. The daemon's own token connects you as the interface `ws`. A token from an `[interfaces.<name>]` entry in the daemon's `config.toml` connects you as that interface, with its own grants and its own sessions, which is what a bot or a web app should use. The admin token makes an admin connection, which may relax a run's approval setting and keeps its sessions apart from everyone else's; keep that one for tools you run yourself.
+Your token tells the daemon who your application is, and there are three kinds:
 
-Save the following code as `example.mjs`, then run `node example.mjs`. You can also use it in a TypeScript project.
+- **The daemon's own token** connects you as the `ws` interface.
+- **A token from an `[interfaces.<name>]` entry** in the daemon's `config.toml` connects you as that interface, with its own grants and its own sessions. Use this kind for a bot or a web app.
+- **The admin token** makes an admin connection. An admin connection can loosen a run's approval setting, and its sessions are kept apart from everyone else's. Use it only for tools you run yourself.
+
+Save this code as `example.mjs` and run `node example.mjs`. It works in a TypeScript project too.
 
 ```ts
 import { AgentdClient, isAgentdError } from '@podofun/agentd-sdk';
@@ -46,13 +54,13 @@ try {
 }
 ```
 
-The client connects when you make your first request. For a short script, close it in `finally` as shown above. For a server application, reuse the client across requests and close it when the application shuts down. If you need to check the connection during startup, call `await client.connect()` first. Create a new client if you need to connect again after `close()`.
+The client connects on your first request. In a short script, close it in `finally` as shown. In a server, create one client, reuse it for every request, and close it when the server shuts down. To check the connection at startup, call `await client.connect()`. After `close()`, create a new client to connect again.
 
-To try the examples below, replace the contents of this script's `try` block. Use action and runner names from your daemon. The examples assume that `git.status` and a runner named `support` are registered, and that `support` has a configured model provider and the required grant in `grants.toml`.
+To try the examples below, put them in place of the `try` block above, and use action and runner names from your own daemon. The examples use an action called `git.status` and a runner called `support`. The `support` runner needs a model provider and its grant in `grants.toml`.
 
 ## Call an action
 
-Call an action when you know which operation you want to perform. For example, a registered `git.status` action can report the state of a repository:
+Call an action when you know which job you want done. For example, a `git.status` action reports the state of a repository:
 
 ```ts
 const response = await client.actions.call('git.status');
@@ -60,11 +68,11 @@ console.log(response.result);
 console.log(`Completed in ${response.duration_ms} ms`);
 ```
 
-The handler's return value is in `response.result`; `duration_ms` tells you how long it took. If the action takes arguments, pass them as the second parameter: `client.actions.call('notes.save', { text: 'Check the release notes' })`. The action must be registered and have the permissions it needs in the daemon's `grants.toml`.
+`response.result` holds what the action returned, and `duration_ms` says how long it took. If the action takes arguments, pass them second: `client.actions.call('notes.save', { text: 'Check the release notes' })`. The action has to be registered in the daemon, with the permissions it needs in `grants.toml`.
 
 ## Ask a runner
 
-Give a runner a prompt and await its answer with `runners.run`. The runner uses its configured model, instructions and permitted actions to handle the request.
+Give a runner a prompt with `runners.run` and wait for its answer. The runner works with its own model, instructions and actions.
 
 ```ts
 const reply = await client.runners.run({
@@ -75,18 +83,18 @@ const reply = await client.runners.run({
 console.log(reply.text);
 ```
 
-Read the answer from `reply.text`. The response also identifies the `provider` and `model`, and includes a `stop_reason`. If every model call reports token usage, `reply.usage` contains the totals.
+The answer is in `reply.text`. The reply also names the `provider` and `model` and gives a `stop_reason`. When the model reports token usage, `reply.usage` has the totals.
 
-A call like this has no conversation history attached. For follow-up questions, use a session or provide the earlier messages yourself through `messages`.
+A call like this starts with an empty history. For a follow-up question, use a session, or pass the earlier messages yourself in `messages`.
 
 ## Continue a conversation
 
-A session lets a runner use earlier messages when it answers a follow-up question. Your application supplies a stable label, such as a user id and chat id, and `sessions.open` finds or creates the conversation.
+A session gives a runner the earlier messages of a conversation. Your application picks a stable label for it, for example from a user id and a chat id, and `sessions.open` finds that session or creates it.
 
-Pass the returned `id` as `session_id` with each prompt. In this example, the second request receives the first exchange as part of its history:
+Pass the session's `id` as `session_id` with each prompt. Here the second prompt can use the first exchange:
 
 ```ts
-const userId = 'alice'; // In your app, use the authenticated user's id.
+const userId = 'alice'; // In your app, use the signed-in user's id.
 const chatId = '42';
 const session = await client.sessions.open(`user-${userId}:chat-${chatId}`, {
   user: userId,
@@ -111,54 +119,56 @@ const saved = await client.sessions.get({ id: session.id, user: userId });
 console.log(saved.turns);
 ```
 
-Use `sessions.get` to read the saved conversation. Its `turns` array contains the messages in order, and the history remains available after a daemon restart. As the conversation grows, the daemon can replace older messages with a summary; the runner's compaction settings control this behavior. The stored history is therefore not a permanent copy of every original message.
+`sessions.get` returns the saved conversation, with the messages in order in `turns`. The history is kept when the daemon restarts. In a long conversation, the daemon can replace older messages with a summary, depending on the runner's compaction settings, so `turns` may not hold every original message.
 
-Send one prompt at a time for each session. Starting a second run before the first finishes returns `session_busy`. When using `session_id`, include a `prompt` and leave out `messages`, because the daemon loads the history for you.
+Send one prompt at a time to a session. A second run that starts before the first one ends fails with `session_busy`. With `session_id`, send a `prompt` and leave out `messages`: the daemon loads the history itself.
 
-If the model run fails, the new exchange is not saved. A summary saved before that failure remains part of the history.
+When a run fails, its exchange is not saved. A summary made before the failure stays in the history.
 
 ### Find and manage sessions
 
-| Call                                                  | What it does                                                                                                                                                          |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.sessions.create({ label, user })`             | Create a session. An existing label produces `session_label_taken`. Both fields are optional.                                                                         |
-| `client.sessions.open(label, { user })`               | Find or create a session with that label.                                                                                                                             |
-| `client.sessions.get({ id, user })`                   | Get its metadata and stored messages. Use `{ label, user }` to look it up by label instead.                                                                           |
-| `client.sessions.list({ user, limit: 50 })`           | List visible sessions, newest first. The default limit is 50; the maximum is 500.                                                                                     |
-| `client.sessions.rename(id, label, { user })`         | Give the session a new label, or pass `null` to clear it. A label another session already uses produces `session_label_taken`.                                        |
-| `client.sessions.setApproval(id, approval, { user })` | Change who answers questions for the session's runs, or pass `null` to clear it. See [Decide who answers approval questions](#decide-who-answers-approval-questions). |
-| `client.sessions.delete(id, { user })`                | Delete the session and its messages. Returns `{ deleted: true }`, or `{ deleted: false }` if no visible session matches.                                              |
+| Call                                                  | What it does                                                                                                                                                                            |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client.sessions.create({ label, user })`             | Creates a session. Both fields are optional. A label that is already in use fails with `session_label_taken`.                                                                           |
+| `client.sessions.open(label, { user })`               | Finds the session with that label, or creates it.                                                                                                                                       |
+| `client.sessions.get({ id, user })`                   | Returns the session's details and saved messages. Pass `{ label, user }` to look it up by label.                                                                                        |
+| `client.sessions.list({ user, limit: 50 })`           | Lists the sessions you can see, newest first. The limit is 50 by default and 500 at most.                                                                                               |
+| `client.sessions.rename(id, label, { user })`         | Gives the session a new label, or removes it when you pass `null`. A label another session uses fails with `session_label_taken`.                                                       |
+| `client.sessions.setApproval(id, approval, { user })` | Changes who answers questions for the session's runs, or removes the setting when you pass `null`. See [Decide who answers approval questions](#decide-who-answers-approval-questions). |
+| `client.sessions.delete(id, { user })`                | Deletes the session and its messages. Returns `{ deleted: true }`, or `{ deleted: false }` when no session you can see matches.                                                         |
 
-The `user` field is optional, but if you set it when creating a session, you must send the same value when using that session later. The optional `runner` field on `create` and `open` is metadata; it does not select or restrict the runner used for later calls.
+`user` is optional. If you create a session with a `user`, send the same `user` every time you use that session. The optional `runner` field on `create` and `open` is a note for your own use: any runner can run in the session.
 
-Every session's metadata keeps a running total of the tokens its runs have used, in `usage`, alongside `turn_count` and the number of `compactions` so far. That makes it easy to show a conversation's cost or cut it off past a budget.
+Each session counts the tokens its runs have used, in `usage`, next to `turn_count` and the number of `compactions`. You can use `usage` to show what a conversation costs, or to stop it at a budget.
 
-A run in a session keeps going until it finishes. It has no default deadline and no limit on how many model turns it takes, so a long task can see itself through. The SDK waits for it too: the client's default `timeoutMs` does not apply to a session run without `timeout_ms`. Pass `timeout_ms` when you want a deadline anyway, pass `timeoutMs` in the call options to stop waiting after a while, or cancel the run as described in [Timeouts and cancellation](#timeouts-and-cancellation).
+A run in a session has no time limit and no limit on model turns by default, so a long task can finish. The SDK waits for it as long as it takes: the client's default `timeoutMs` does not apply to a session run without `timeout_ms`. To set a limit, pass `timeout_ms` for the daemon, pass `timeoutMs` in the call options to stop waiting, or cancel the run as shown in [Timeouts and cancellation](#timeouts-and-cancellation).
 
 ### Work in a folder
 
-When your application runs on the same machine as the daemon, a session can work in a folder of your choosing, so its runs read and write files relative to that project. Pass an absolute path as `cwd` when you create the session:
+If your application runs on the same machine as the daemon, a session can work in a folder you choose. Its runs then read and write files in that folder. Pass the folder's absolute path as `cwd` when you create the session:
 
 ```ts
 const session = await client.sessions.create({ label: 'repo-chat', cwd: '/home/alice/code/shop' });
 console.log(session.cwd);
 ```
 
-The daemon asks an approver once before it trusts a folder it does not know (see [Answer approval requests](#answer-approval-requests)), and remembers it for good if they choose "allow forever". If nobody approves, the call fails with `session_folder_denied`. A relative path, a folder that does not exist, or a request from an interface token fails with `session_folder_not_allowed`, because only the daemon's own token and admin connections may pick a folder. This needs a daemon release that supports session folders. On an older daemon, `sessions.create` and `sessions.open` reject with an error that says so, rather than quietly making a session without the folder.
+The first time a session asks for a folder the daemon does not trust yet, the daemon asks an approver (see [Answer approval requests](#answer-approval-requests)). If the approver chooses "allow forever", the daemon trusts that folder from then on. If nobody allows it, the call fails with `session_folder_denied`.
 
-### Session ownership
+Only the daemon's own token and admin connections can choose a folder. A relative path, a folder that does not exist, or a request on an interface token fails with `session_folder_not_allowed`. Older daemons do not support session folders: on those, `sessions.create` and `sessions.open` fail with an error that says so.
 
-The application's token identifies an interface in the daemon. Sessions belong to that interface, so give applications separate interface tokens when their conversations must stay separate.
+### Who can use a session
 
-Within an interface, `user` restricts a session to the person identified by your backend. Authenticate the person before passing their id, and send the same `user` with every request for that session. The daemon trusts this value, so take it from your authenticated application context rather than directly from browser input. Keep the SDK and its token on your server.
+Your application's token identifies an interface in the daemon, and sessions belong to that interface. Give two applications separate interface tokens when their conversations must stay apart.
 
-Without `user`, any caller from the same interface can use the session. Labels are also unique across the entire interface, so include a user identifier in the label when each person needs their own conversation.
+Inside one interface, `user` limits a session to one person. Sign the person in first, then send their id as `user` on every request for that session. The daemon trusts whatever `user` you send, so take it from your signed-in session on the server, and keep the SDK and its token on your server.
 
-`session_id` selects stored conversation history. The separate `session` parameter is a caller identity used by handlers; setting it does not save or load a conversation.
+A session without a `user` is open to every caller on the same interface. Labels are unique across the whole interface, so put the user's id in the label when each person needs their own conversation.
+
+`session_id` chooses which saved conversation a run uses. The separate `session` parameter names the caller for action handlers, and it does not save or load any conversation.
 
 ## Stream an answer
 
-For an interface that displays an answer as it is generated, use `runners.stream`. Each iteration gives you an update: a piece of text, an action the model asked for, the result of that action, or the end of a model turn. The method accepts the same inputs as `runners.run`, including `session_id` and `user` for an existing conversation.
+To show an answer while it is being written, use `runners.stream`. Each step of the loop gives you one update: a piece of text, an action the model called, that action's result, or the end of a model turn. It takes the same inputs as `runners.run`, including `session_id` and `user`.
 
 ```ts
 const stream = client.runners.stream({
@@ -178,13 +188,13 @@ const reply = await stream.result;
 console.log('\nCompleted with:', reply.model);
 ```
 
-A `tool_result` update carries the action's `name`, the `input` the model passed and the `output` it got back, or an `error` when the call failed. Any secret the run read is replaced by `<secret name>` in both, so you can show these to the person watching without leaking credentials.
+A `tool_result` update has the action's `name`, the `input` the model gave it, and the `output` it returned, or an `error` when it failed. Secrets the run read appear as `<secret name>` in both, so you can show these updates to the person watching.
 
-After reading the updates, await `stream.result` to get the completed response. Treat streamed text as provisional until the run succeeds, because an error can occur after some text has arrived. If you leave the loop early with `break`, the SDK asks the daemon to cancel the run.
+After the loop, await `stream.result` for the finished reply. A run can still fail after some text has arrived, so treat streamed text as a draft until the run succeeds. If you `break` out of the loop, the SDK asks the daemon to cancel the run.
 
 ## Timeouts and cancellation
 
-Pass request options after the call parameters to control how long your application waits. This example uses an abort signal to stop waiting after 30 seconds:
+Pass request options after a call's parameters to control how long your application waits. Here an abort signal stops waiting after 30 seconds:
 
 ```ts
 const reply = await client.runners.run(
@@ -194,41 +204,48 @@ const reply = await client.runners.run(
 console.log(reply.text);
 ```
 
-For a Cancel button or a disconnected request, create an `AbortController`, pass its `signal` in the same position and call `controller.abort()` when the work is no longer needed.
+For a Cancel button, or a request whose user went away, create an `AbortController`, pass its `signal` in the same place, and call `controller.abort()` when you no longer need the result.
 
-| Setting                                       | What it controls                                                              | Default                                                        |
-| --------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `connectTimeoutMs` in `new AgentdClient(...)` | Time allowed to establish the connection.                                     | 30 seconds                                                     |
-| `timeoutMs` on the client or a call           | Time the client waits for a response after connecting. `0` means no limit.    | 11 minutes, or no limit for a session run without `timeout_ms` |
-| `timeout_ms` in runner parameters             | Time the daemon allows the runner to work. Accepts 1 to 600,000 milliseconds. | 2 minutes, or no limit for a run in a session                  |
+| Setting                                       | What it controls                                                             | Default                                                        |
+| --------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `connectTimeoutMs` in `new AgentdClient(...)` | How long the client tries to connect.                                        | 30 seconds                                                     |
+| `timeoutMs` on the client or a call           | How long the client waits for a response once connected. `0` means no limit. | 11 minutes, or no limit for a session run without `timeout_ms` |
+| `timeout_ms` in runner parameters             | How long the daemon lets the runner work, from 1 to 600,000 milliseconds.    | 2 minutes, or no limit for a run in a session                  |
 
-Client and daemon deadlines serve different purposes: `timeoutMs` controls how long your application waits after connecting, while `timeout_ms` controls how long the daemon allows a runner to work. An abort signal can also stop waiting during connection setup.
+`timeoutMs` is how long your application waits. `timeout_ms` is how long the daemon lets the runner work. An abort signal also works while the client is still connecting.
 
-When your application stops waiting for a runner, the SDK asks the daemon to cancel it. For a direct action call, the action can continue after your application stops waiting. Neither case undoes work that has already completed.
+When your application stops waiting for a runner, the SDK asks the daemon to cancel the run. An action call keeps running on the daemon after you stop waiting. In both cases, work that already finished stays done.
 
-Session methods also accept request options. For `open` and `delete`, they are the third argument: `client.sessions.open(label, { user }, { signal })` and `client.sessions.delete(id, { user }, { signal })`.
+Session methods take request options too. For `open` and `delete`, they come third: `client.sessions.open(label, { user }, { signal })` and `client.sessions.delete(id, { user }, { signal })`.
 
 ## Handle errors
 
-The first example catches errors with `isAgentdError`. When the daemon reports a failure, the error includes a `code` for application logic, a readable `message` and, when available, a `tip` explaining what to check.
+The first example catches errors with `isAgentdError`. An error from the daemon has a `code` for your program to check, a `message` to show, and often a `tip` that says what to look at.
 
-For example, `isAgentdError(error, 'session_busy')` identifies a conversation that already has a run in progress. Wait for that run before trying again. If you receive `session_not_found`, check the session id, application token and user id; a session outside the caller's scope is treated as missing.
+For example, `isAgentdError(error, 'session_busy')` tells you a conversation already has a run going: wait for it to finish, then try again. If you get `session_not_found`, check the session id, the token and the user id. A session that belongs to someone else looks the same as a missing one.
 
-A `denied` error means the daemon's grants do not allow the operation, or an approver said no. A `bad_params` error means the request needs to be corrected. Provider errors can include `providerStatus` and `retryAfterMs`, which help you decide whether to fix the provider configuration or try again later.
+| Code                                                  | What it means                                                                                                     |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `denied`                                              | The daemon's grants do not allow it, or an approver said no.                                                      |
+| `bad_params`                                          | Something in the request needs fixing.                                                                            |
+| `approval_forbidden`                                  | The run asked for a looser approval setting than its runner or session has. Only an admin connection can do that. |
+| `classifier_not_configured`                           | You chose `classifier`, but the daemon has no classifier runner set up.                                           |
+| `runner_turn_limit`                                   | A run outside a session used all of its model turns. Runs in a session have no turn limit.                        |
+| `session_folder_not_allowed`, `session_folder_denied` | See [Work in a folder](#work-in-a-folder).                                                                        |
 
-A few codes come from approval settings and folders. `approval_forbidden` means a run asked for a looser approval setting than its runner or session allows, and only an admin connection may do that. `classifier_not_configured` means you chose `classifier`, but the daemon has no classifier runner set up. `runner_turn_limit` means a run outside a session used all its model turns; running it in a session lifts that limit. `session_folder_not_allowed` and `session_folder_denied` are explained in [Work in a folder](#work-in-a-folder).
+Provider errors can carry `providerStatus` and `retryAfterMs`, which tell you whether to fix the provider's settings or try again later.
 
-Connection failures, client timeouts and local cancellation are ordinary errors rather than `AgentdError`. After a dropped connection, the next request can reconnect, but failed calls are not retried automatically. Before repeating an operation that changes data, check whether it completed; a lost response does not mean the operation failed.
+A failed connection, a client timeout, and a call you cancelled throw an ordinary `Error`. Only errors from the daemon are `AgentdError`. After the connection drops, your next request reconnects, but the SDK does not retry failed calls for you. Before you repeat a call that changes data, check whether it went through: a lost response does not mean the call failed.
 
 ## Decide who answers approval questions
 
-When a run reaches for something its grants do not cover, the daemon can ask before refusing. Each run settles once, as it starts, who answers those questions:
+When a run needs something its grants do not cover, the daemon can ask before it refuses. When a run starts, the daemon settles who answers its questions:
 
-- `human` sends the question to an approver connected to the daemon. This is the default.
-- `classifier` lets the runner named in `[approval].classifier` in `grants.toml` decide, and passes the question to a human when it is unsure.
-- `nobody` refuses anything that is not granted, without asking.
+- `human`: an approver connected to the daemon answers. This is the default.
+- `classifier`: the runner named in `[approval].classifier` in `grants.toml` answers, and hands a question to a human when it is unsure.
+- `nobody`: anything not granted is refused, and nobody is asked.
 
-The runner's own setting in `grants.toml` comes first, then the session's, then the one you pass for a single run. You can always choose something stricter, so passing `approval: 'nobody'` for an unattended job is always allowed:
+The runner's setting in `grants.toml` applies first, then the session's, then the one you pass for a single run. You can always choose a stricter setting, so `approval: 'nobody'` works for any unattended job:
 
 ```ts
 const reply = await client.runners.run({
@@ -238,13 +255,13 @@ const reply = await client.runners.run({
 });
 ```
 
-To set it for every run in a conversation, pass `approval` to `sessions.create`, or change it later with `client.sessions.setApproval(session.id, 'nobody', { user })`. Something looser than the runner allows, such as `classifier` for a `human` runner, only takes effect for an admin connection. A run asking for it from any other connection fails with `approval_forbidden`, and a looser session setting is simply not applied to it.
+To set it for every run in a conversation, pass `approval` to `sessions.create`, or change it later with `client.sessions.setApproval(session.id, 'nobody', { user })`. A looser setting than the runner's own, such as `classifier` for a `human` runner, works only on an admin connection. From any other connection, a run that asks for it fails with `approval_forbidden`, and a looser session setting does not apply to it.
 
 ## Answer approval requests
 
-An approver is any program connected to the daemon's approval plane with the admin token. `AgentdControl` is that connection. Listen with `approvals.requests()` and answer each request with `approvals.resolve`.
+An approver is a program that answers the daemon's approval questions. It connects with the admin token through `AgentdControl`, listens with `approvals.requests()`, and answers each question with `approvals.resolve`.
 
-A good approver says no unless it has a reason to say yes. This one lets runs reach two hosts it trusts and work inside one projects folder, and refuses everything else:
+An approver should refuse anything it has no reason to allow. This one allows two hosts and one projects folder, and refuses everything else:
 
 ```ts
 import { AgentdControl, type ApprovalRequest, type Verdict } from '@podofun/agentd-sdk';
@@ -275,22 +292,31 @@ for await (const request of control.approvals.requests()) {
 }
 ```
 
-`connect()` resolves once the daemon has confirmed the subscription, so every question asked after that reaches you. The loop connects on its own too, but awaiting `connect()` first means a bad URL or token fails right at startup.
+`connect()` returns once the daemon has confirmed it will send you questions, so you receive every question asked after that. The loop also connects by itself, but calling `connect()` first means a wrong address or token fails at startup.
 
-Every request has a `kind`. `missing_grant` means a tool lacks permissions, `confirm` means the action always asks first, `runner_action` means a runner called an action outside its list, and `folder` means a client wants a session to work in a folder nobody has trusted yet. `detail` shows what the call is about to do, with secrets replaced by their names, and `caller` shows who asked. When `warning` is present, show it before offering "allow forever".
+Every request has a `kind`:
 
-The verdict is one of `allow_once`, `allow_forever`, which also writes the grant or trusted folder to `grants.toml`, or `deny`. A request nobody answers is refused once the daemon's approval timeout runs out, and with no approver connected the daemon refuses straight away. The loop ends quietly when you break out of it, abort the `signal` you passed to `requests({ signal })`, or call `control.close()`. It throws if the connection drops, so wrap it in a retry if your approver should stay up. Keep the admin token on machines you control: anyone holding it can approve anything.
+- `missing_grant`: a tool is missing a permission.
+- `confirm`: the action asks before every use.
+- `runner_action`: a runner called an action that is not on its list.
+- `folder`: a session wants to work in a folder the daemon does not trust yet.
+
+`detail` shows what the call is about to do, with secrets replaced by their names, and `caller` shows who is asking. When a request has a `warning`, show it before you offer "allow forever".
+
+The answer is `allow_once`, `allow_forever` or `deny`. `allow_forever` also writes the grant or the trusted folder into `grants.toml`. A question nobody answers is refused when the daemon's approval timeout runs out, and when no approver is connected the daemon refuses at once.
+
+The loop ends when you `break` out of it, abort the `signal` you passed to `requests({ signal })`, or call `control.close()`. It throws if the connection drops, so restart it if your approver has to stay up. Keep the admin token on machines you control: whoever has it can approve anything.
 
 ## Explore your daemon
 
-| Call                           | Result                                                          |
-| ------------------------------ | --------------------------------------------------------------- |
-| `client.health()`              | `'ok'` when the daemon responds.                                |
-| `client.tools.list()`          | Registered action names.                                        |
-| `client.runners.list()`        | Runner names, models, skills and allowed actions.               |
-| `client.runners.inspect(name)` | A runner's configuration, including its composed system prompt. |
-| `client.skills.list()`         | Available skills and their descriptions.                        |
-| `client.skills.inspect(name)`  | A skill's definition and prompt text.                           |
-| `client.services.list()`       | Background services and their current state.                    |
+| Call                           | Result                                                 |
+| ------------------------------ | ------------------------------------------------------ |
+| `client.health()`              | `'ok'` when the daemon responds.                       |
+| `client.tools.list()`          | The names of the registered actions.                   |
+| `client.runners.list()`        | Each runner's name, model, skills and allowed actions. |
+| `client.runners.inspect(name)` | A runner's settings, including its full system prompt. |
+| `client.skills.list()`         | The available skills and their descriptions.           |
+| `client.skills.inspect(name)`  | A skill's definition and its prompt text.              |
+| `client.services.list()`       | The background services and their current state.       |
 
-For deployment health checks, `probeHealth(url)` reports whether the daemon is alive and `probeReady(url)` reports whether it is accepting work. Import either function from the package and await its result. They require no token and reject if the daemon cannot be reached; `probeReady` returns `false` while the daemon is shutting down.
+For health checks in a deployment, `probeHealth(url)` tells you whether the daemon is up, and `probeReady(url)` whether it is taking work. Import them from the package and await the result. They need no token and throw if the daemon cannot be reached. `probeReady` returns `false` while the daemon is shutting down.
