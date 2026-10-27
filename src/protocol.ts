@@ -66,8 +66,44 @@ export interface ErrorFrame {
 
 export type ResponseFrame<T = unknown> = SuccessFrame<T> | ErrorFrame;
 
-export type RunnerDelta =
-  { type: 'text_delta'; text: string } | { type: 'tool_call'; name: string } | { type: 'turn_end' };
+/** Any value JSON can carry. Used where the daemon passes data through without a fixed shape. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+/** A chunk of the assistant's answer, in order. */
+export interface TextDelta {
+  type: 'text_delta';
+  text: string;
+}
+
+/** The model asked for a tool. Sent as soon as the name is known, before the call runs. */
+export interface ToolCallDelta {
+  type: 'tool_call';
+  /** The action's registered name, such as `git.status`. */
+  name: string;
+}
+
+/**
+ * A tool call finished. Any secret the run read is replaced by `<secret name>` in both
+ * `input` and `output`, so this is safe to show to the person watching the run.
+ */
+export interface ToolResultDelta {
+  type: 'tool_result';
+  name: string;
+  /** The arguments the model passed. */
+  input: JsonValue;
+  /** What the action returned. Absent when the call failed or returned nothing. */
+  output?: JsonValue;
+  /** Why the call failed. Only present on failure. */
+  error?: string;
+}
+
+/** One model turn ended. The runner may start another after running tools. */
+export interface TurnEndDelta {
+  type: 'turn_end';
+}
+
+/** One streaming update from `runners.stream`. Switch on `type`. */
+export type RunnerDelta = TextDelta | ToolCallDelta | ToolResultDelta | TurnEndDelta;
 
 export interface DeltaFrame {
   event: 'runner.delta';

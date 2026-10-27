@@ -73,7 +73,11 @@ test('malformed frames reject all pending requests', async t => {
     '{"ok":true,"result":1}',
     '{"id":1,"ok":true}',
     '{"id":1,"ok":false}',
-    '{"id":1,"event":"runner.delta","delta":{"type":"nope"}}',
+    '{"id":1,"event":"runner.delta","delta":{"type":"text_delta"}}',
+    '{"id":1,"event":"runner.delta","delta":{"type":"tool_result","name":"x"}}',
+    '{"id":1,"event":"runner.delta","delta":{"type":"tool_result","name":"x","input":{},"error":5}}',
+    '{"id":1,"event":"runner.delta","delta":"text"}',
+    '{"event":"approval.request"}',
   ]) {
     const f = await fixture(t, socket => socket.send(frame));
     const results = await Promise.allSettled([f.conn.request('a', {}), f.conn.request('b', {})]);

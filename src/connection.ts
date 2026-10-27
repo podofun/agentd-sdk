@@ -54,17 +54,24 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isDelta(value: unknown): value is RunnerDelta {
-  if (!isObject(value)) return false;
+/** Whether a runner delta is one we know, one we do not (skipped, so a newer daemon cannot break you), or broken. */
+function classifyDelta(value: unknown): 'known' | 'unknown' | 'invalid' {
+  if (!isObject(value) || typeof value.type !== 'string') return 'invalid';
   switch (value.type) {
     case 'text_delta':
-      return typeof value.text === 'string';
+      return typeof value.text === 'string' ? 'known' : 'invalid';
     case 'tool_call':
-      return typeof value.name === 'string';
+      return typeof value.name === 'string' ? 'known' : 'invalid';
+    case 'tool_result':
+      return typeof value.name === 'string' &&
+        Object.hasOwn(value, 'input') &&
+        (value.error === undefined || typeof value.error === 'string')
+        ? 'known'
+        : 'invalid';
     case 'turn_end':
-      return true;
+      return 'known';
     default:
-      return false;
+      return 'unknown';
   }
 }
 
@@ -269,13 +276,14 @@ export class Connection {
     const pending = this.pending.get(id);
 
     if (frame.event === 'runner.delta') {
-      if (!isDelta(frame.delta)) {
+      const kind = classifyDelta(frame.delta);
+      if (kind === 'invalid') {
         this.disconnect(new Error('Invalid runner delta from daemon'));
         return;
       }
-      if (!pending) return;
+      if (!pending || kind === 'unknown') return;
       try {
-        pending.onDelta?.(frame.delta);
+        pending.onDelta?.(frame.delta as RunnerDelta);
       } catch (error) {
         this.settle(id, error);
       }

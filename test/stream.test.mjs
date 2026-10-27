@@ -114,3 +114,59 @@ test('abort signal and timeout apply to streams', async t => {
   const timed = f.client.runners.stream({ name: 'r', prompt: 'hi' }, { timeoutMs: 30 });
   await assert.rejects(timed.result, /timed out/);
 });
+
+test('tool results stream through with their input, output and error', async t => {
+  const results = [
+    { type: 'tool_call', name: 'demo.token' },
+    {
+      type: 'tool_result',
+      name: 'demo.token',
+      input: { scope: 'repo' },
+      output: { token: '<secret gh_token>' },
+    },
+    { type: 'tool_result', name: 'demo.fail', input: {}, error: 'the action failed' },
+    { type: 'turn_end' },
+  ];
+  const f = await fixture(t, (socket, req) => {
+    for (const d of results) delta(socket, req.id, d);
+    reply(socket, req, outcome);
+  });
+  const stream = f.client.runners.stream({ name: 'r', prompt: 'hi' });
+  const seen = [];
+  for await (const d of stream) seen.push(d);
+  assert.deepEqual(seen, results);
+  assert.deepEqual(await stream.result, outcome);
+});
+
+test('delta types this SDK does not know are skipped without dropping the connection', async t => {
+  const f = await fixture(t, (socket, req) => {
+    delta(socket, req.id, { type: 'thinking_delta', text: 'hmm' });
+    delta(socket, req.id, { type: 'text_delta', text: 'ok' });
+    reply(socket, req, outcome);
+  });
+  const stream = f.client.runners.stream({ name: 'r', prompt: 'hi' });
+  const seen = [];
+  for await (const d of stream) seen.push(d);
+  assert.deepEqual(seen, [{ type: 'text_delta', text: 'ok' }]);
+  // The same socket keeps serving requests afterwards.
+  assert.deepEqual(await f.client.health(), outcome);
+  assert.equal(f.connections(), 1);
+});
+
+test('stream params carry the approval setting and session id', async t => {
+  const f = await fixture(t, (socket, req) => reply(socket, req, { ...outcome, session_id: 's-1' }));
+  const stream = f.client.runners.stream({
+    name: 'r',
+    prompt: 'hi',
+    session_id: 's-1',
+    approval: 'nobody',
+  });
+  assert.equal((await stream.result).session_id, 's-1');
+  assert.deepEqual(f.requests[0].params, {
+    name: 'r',
+    prompt: 'hi',
+    session_id: 's-1',
+    approval: 'nobody',
+    stream: true,
+  });
+});
