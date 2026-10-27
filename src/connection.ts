@@ -19,7 +19,7 @@ export interface ConnectionOptions {
 
 export interface RequestOptions {
   signal?: AbortSignal;
-  /** Wait this long for a reply instead of the client default. */
+  /** Wait this long for a reply instead of the client default, in milliseconds. `0` waits as long as it takes. */
   timeoutMs?: number;
 }
 
@@ -28,6 +28,8 @@ export interface InternalRequestOptions extends RequestOptions {
   runner?: boolean;
   /** Called for each streaming delta that belongs to this request. Keep it quick and synchronous. */
   onDelta?: (delta: RunnerDelta) => void;
+  /** Ignore the connection's default timeout. An explicit `timeoutMs` still applies. */
+  noDefaultTimeout?: boolean;
 }
 
 interface Pending {
@@ -45,6 +47,11 @@ export function validateTimeout(value: number, label: string): number {
     throw new RangeError(`${label} must be an integer between 1 and ${MAX_TIMEOUT} milliseconds`);
   }
   return value;
+}
+
+/** Like `validateTimeout`, but `0` is allowed and means no limit. */
+export function validateWaitTimeout(value: number, label: string): number {
+  return value === 0 ? 0 : validateTimeout(value, label);
 }
 
 /** Promises should reject with an Error. Abort reasons and thrown values can be anything, so normalise them. */
@@ -106,7 +113,7 @@ export class Connection {
 
   constructor(options: ConnectionOptions) {
     validateTimeout(options.connectTimeoutMs, 'connectTimeoutMs');
-    validateTimeout(options.timeoutMs, 'timeoutMs');
+    validateWaitTimeout(options.timeoutMs, 'timeoutMs');
     const { token, ...rest } = options;
     if (token !== undefined && (!token.trim() || /[\r\n]/.test(token))) {
       throw new TypeError('Invalid bearer token');
@@ -171,7 +178,10 @@ export class Connection {
 
   async request<T>(method: string, params: unknown, options: InternalRequestOptions = {}): Promise<T> {
     if (typeof method !== 'string' || !method) throw new TypeError('An RPC method name is required');
-    const timeout = validateTimeout(options.timeoutMs ?? this.options.timeoutMs, 'timeoutMs');
+    const timeout = validateWaitTimeout(
+      options.timeoutMs ?? (options.noDefaultTimeout ? 0 : this.options.timeoutMs),
+      'timeoutMs',
+    );
     options.signal?.throwIfAborted();
     const encodedParams = JSON.stringify(params ?? null);
     if (encodedParams === undefined) throw new TypeError('Params must be JSON serializable');
@@ -199,10 +209,10 @@ export class Connection {
 
     return new Promise<T>((resolve, reject) => {
       const abort = () => this.settle(id, options.signal!.reason);
-      const timer = setTimeout(
-        () => this.settle(id, new Error(`Request timed out after ${timeout} ms`)),
-        timeout,
-      );
+      const timer =
+        timeout === 0
+          ? undefined
+          : setTimeout(() => this.settle(id, new Error(`Request timed out after ${timeout} ms`)), timeout);
       const cleanup = () => {
         clearTimeout(timer);
         options.signal?.removeEventListener('abort', abort);

@@ -133,7 +133,7 @@ The `user` field is optional, but if you set it when creating a session, you mus
 
 Every session's metadata keeps a running total of the tokens its runs have used, in `usage`, alongside `turn_count` and the number of `compactions` so far. That makes it easy to show a conversation's cost or cut it off past a budget.
 
-A run in a session keeps going until it finishes. It has no default deadline and no limit on how many model turns it takes, so a long task can see itself through. Pass `timeout_ms` when you want a deadline anyway, or cancel the run as described in [Timeouts and cancellation](#timeouts-and-cancellation).
+A run in a session keeps going until it finishes. It has no default deadline and no limit on how many model turns it takes, so a long task can see itself through. The SDK waits for it too: the client's default `timeoutMs` does not apply to a session run without `timeout_ms`. Pass `timeout_ms` when you want a deadline anyway, pass `timeoutMs` in the call options to stop waiting after a while, or cancel the run as described in [Timeouts and cancellation](#timeouts-and-cancellation).
 
 ### Work in a folder
 
@@ -196,11 +196,11 @@ console.log(reply.text);
 
 For a Cancel button or a disconnected request, create an `AbortController`, pass its `signal` in the same position and call `controller.abort()` when the work is no longer needed.
 
-| Setting                                       | What it controls                                                              | Default                                       |
-| --------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------- |
-| `connectTimeoutMs` in `new AgentdClient(...)` | Time allowed to establish the connection.                                     | 30 seconds                                    |
-| `timeoutMs` on the client or a call           | Time the client waits for a response after connecting.                        | 11 minutes                                    |
-| `timeout_ms` in runner parameters             | Time the daemon allows the runner to work. Accepts 1 to 600,000 milliseconds. | 2 minutes, or no limit for a run in a session |
+| Setting                                       | What it controls                                                              | Default                                                        |
+| --------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `connectTimeoutMs` in `new AgentdClient(...)` | Time allowed to establish the connection.                                     | 30 seconds                                                     |
+| `timeoutMs` on the client or a call           | Time the client waits for a response after connecting. `0` means no limit.    | 11 minutes, or no limit for a session run without `timeout_ms` |
+| `timeout_ms` in runner parameters             | Time the daemon allows the runner to work. Accepts 1 to 600,000 milliseconds. | 2 minutes, or no limit for a run in a session                  |
 
 Client and daemon deadlines serve different purposes: `timeoutMs` controls how long your application waits after connecting, while `timeout_ms` controls how long the daemon allows a runner to work. An abort signal can also stop waiting during connection setup.
 

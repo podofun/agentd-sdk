@@ -1,4 +1,10 @@
-import { Connection, toError, validateTimeout, type RequestOptions } from './connection.js';
+import {
+  Connection,
+  toError,
+  validateTimeout,
+  validateWaitTimeout,
+  type RequestOptions,
+} from './connection.js';
 import type {
   ActionResult,
   ApprovalSetting,
@@ -33,7 +39,12 @@ export interface ClientOptions {
   token?: string;
   /** How long to wait for the WebSocket handshake before giving up, in milliseconds. Defaults to 30 seconds. */
   connectTimeoutMs?: number;
-  /** How long to wait for a reply once connected, in milliseconds. Defaults to 11 minutes, which comfortably covers the daemon's longest allowed run. */
+  /**
+   * How long to wait for a reply once connected, in milliseconds. Defaults to 11 minutes, which comfortably
+   * covers the daemon's longest allowed `timeout_ms`. A session run without `timeout_ms` has no deadline on
+   * the daemon, so it ignores this default and waits until it finishes; pass `timeoutMs` on the call to cap
+   * it anyway. `0` waits as long as it takes for every request.
+   */
   timeoutMs?: number;
 }
 
@@ -52,6 +63,11 @@ function compact<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
 
+/** A session run with no `timeout_ms` has no deadline on the daemon, so the client should not invent one. */
+function unbounded(params: RunParams): boolean {
+  return params.session_id !== undefined && params.timeout_ms === undefined;
+}
+
 /**
  * Your handle on a running agent.d daemon.
  *
@@ -68,7 +84,7 @@ export class AgentdClient {
       url: resolveWsUrl(options.url),
       token: options.token,
       connectTimeoutMs: validateTimeout(options.connectTimeoutMs ?? 30_000, 'connectTimeoutMs'),
-      timeoutMs: validateTimeout(options.timeoutMs ?? 660_000, 'timeoutMs'),
+      timeoutMs: validateWaitTimeout(options.timeoutMs ?? 660_000, 'timeoutMs'),
     });
   }
 
@@ -120,6 +136,7 @@ export class AgentdClient {
       this.#connection.request('runners.run', compact({ ...params, stream: false }), {
         ...options,
         runner: true,
+        noDefaultTimeout: unbounded(params),
       }),
     /** Run a runner and watch the answer arrive. Iterate for deltas, then await `.result` for the finished outcome. */
     stream: (params: RunParams, options: RequestOptions = {}): RunnerStream =>
@@ -221,6 +238,7 @@ export class AgentdClient {
         timeoutMs: options.timeoutMs,
         signal: controller.signal,
         runner: true,
+        noDefaultTimeout: unbounded(params),
         onDelta: delta => {
           buffer.push(delta);
           notify();

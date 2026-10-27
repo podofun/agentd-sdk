@@ -156,6 +156,7 @@ test('the admin token never appears when the control client is logged or seriali
   for (const dump of [util.inspect(control, { depth: 20 }), JSON.stringify(control), String(control)]) {
     assert.ok(!dump.includes(token), dump);
   }
-  assert.throws(() => new AgentdControl({ timeoutMs: 0 }), RangeError);
+  assert.throws(() => new AgentdControl({ timeoutMs: -1 }), RangeError);
+  new AgentdControl({ timeoutMs: 0 }).close();
   assert.throws(() => new AgentdControl({ url: 'file:///x' }), TypeError);
 });

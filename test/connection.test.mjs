@@ -237,7 +237,8 @@ test('handshake rejection is explicit and close rejects pending and future work'
 test('pre-aborted requests, bad timeouts and unserializable params never touch the socket', async t => {
   const f = await fixture(t, () => {});
   await assert.rejects(f.conn.request('health', {}, { signal: AbortSignal.abort() }), { name: 'AbortError' });
-  await assert.rejects(f.conn.request('health', {}, { timeoutMs: 0 }), RangeError);
+  await assert.rejects(f.conn.request('health', {}, { timeoutMs: -1 }), RangeError);
+  await assert.rejects(f.conn.request('health', {}, { timeoutMs: 1.5 }), RangeError);
   await assert.rejects(f.conn.request('health', { big: 1n }), TypeError);
   await assert.rejects(f.conn.request('', {}), TypeError);
   assert.equal(f.connections(), 0);

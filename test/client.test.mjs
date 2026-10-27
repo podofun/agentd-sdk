@@ -116,7 +116,9 @@ test('daemon failures surface as AgentdError with typed code', async t => {
 test('options validation happens in the constructor', () => {
   assert.throws(() => new AgentdClient({ url: 'file:///x' }), TypeError);
   assert.throws(() => new AgentdClient({ token: 'bad\r\n' }), TypeError);
-  assert.throws(() => new AgentdClient({ timeoutMs: 0 }), RangeError);
+  assert.throws(() => new AgentdClient({ timeoutMs: -1 }), RangeError);
+  assert.throws(() => new AgentdClient({ connectTimeoutMs: 0 }), RangeError);
+  new AgentdClient({ timeoutMs: 0 }).close();
   assert.throws(() => new AgentdClient({ connectTimeoutMs: -1 }), RangeError);
   new AgentdClient().close();
 });
@@ -280,4 +282,44 @@ test('sessions.open passes approval and cwd through to create', async t => {
     approval: 'nobody',
     cwd: '/work/app',
   });
+});
+
+test('a session run without timeout_ms is not cut off by the client default', async t => {
+  const outcome = { text: 'late', provider: 'p', model: null, stop_reason: null };
+  const server = await startServer(t, (socket, req) => {
+    if (req.method === 'runners.cancel') return reply(socket, req, { cancelled: true });
+    setTimeout(() => reply(socket, req, outcome), 150);
+  });
+  const client = new AgentdClient({ url: server.url, token: TOKEN, timeoutMs: 50 });
+  t.after(() => client.close());
+
+  assert.deepEqual(await client.runners.run({ name: 'r', prompt: 'hi', session_id: 's' }), outcome);
+  const stream = client.runners.stream({ name: 'r', prompt: 'hi', session_id: 's' });
+  assert.deepEqual(await stream.result, outcome);
+
+  // Without a session, or with a daemon deadline, the client default still applies.
+  await assert.rejects(client.runners.run({ name: 'r', prompt: 'hi' }), /timed out after 50 ms/);
+  await assert.rejects(
+    client.runners.run({ name: 'r', prompt: 'hi', session_id: 's', timeout_ms: 100 }),
+    /timed out after 50 ms/,
+  );
+  // An explicit per-call timeout still wins for a session run.
+  await assert.rejects(
+    client.runners.run({ name: 'r', prompt: 'hi', session_id: 's' }, { timeoutMs: 30 }),
+    /timed out after 30 ms/,
+  );
+  const cancels = () => server.requests.filter(r => r.method === 'runners.cancel').length;
+  for (let i = 0; i < 100 && cancels() < 3; i++) await new Promise(r => setTimeout(r, 5));
+  assert.equal(cancels(), 3);
+});
+
+test('timeoutMs 0 means wait as long as it takes', async t => {
+  const server = await startServer(t, (socket, req) => setTimeout(() => reply(socket, req, 'ok'), 120));
+  const client = new AgentdClient({ url: server.url, token: TOKEN, timeoutMs: 0 });
+  t.after(() => client.close());
+  assert.equal(await client.health(), 'ok');
+  const capped = new AgentdClient({ url: server.url, token: TOKEN, timeoutMs: 50 });
+  t.after(() => capped.close());
+  assert.equal(await capped.health({ timeoutMs: 0 }), 'ok');
+  await assert.rejects(capped.health(), /timed out after 50 ms/);
 });

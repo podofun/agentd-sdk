@@ -1,4 +1,10 @@
-import { Connection, toError, validateTimeout, type RequestOptions } from './connection.js';
+import {
+  Connection,
+  toError,
+  validateTimeout,
+  validateWaitTimeout,
+  type RequestOptions,
+} from './connection.js';
 import type { ApprovalRequest, ResolveResult, SubscribeResult, Verdict } from './protocol.js';
 import { resolveControlUrl } from './url.js';
 
@@ -9,7 +15,7 @@ export interface ControlOptions {
   adminToken?: string;
   /** How long to wait for the WebSocket handshake, in milliseconds. Defaults to 30 seconds. */
   connectTimeoutMs?: number;
-  /** How long to wait for a reply to `subscribe` or `resolve`, in milliseconds. Defaults to 30 seconds. */
+  /** How long to wait for a reply to `subscribe` or `resolve`, in milliseconds. Defaults to 30 seconds; `0` waits as long as it takes. */
   timeoutMs?: number;
 }
 
@@ -73,7 +79,7 @@ export class AgentdControl {
       url: resolveControlUrl(options.url),
       token: options.adminToken,
       connectTimeoutMs: validateTimeout(options.connectTimeoutMs ?? 30_000, 'connectTimeoutMs'),
-      timeoutMs: validateTimeout(options.timeoutMs ?? 30_000, 'timeoutMs'),
+      timeoutMs: validateWaitTimeout(options.timeoutMs ?? 30_000, 'timeoutMs'),
       onEvent: (event, frame) => {
         if (event !== 'approval.request') return;
         const request = parseApprovalRequest(frame);
