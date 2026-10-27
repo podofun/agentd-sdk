@@ -1,6 +1,13 @@
-import { Connection, toError, validateTimeout, type RequestOptions } from './connection.js';
+import {
+  Connection,
+  toError,
+  validateTimeout,
+  validateWaitTimeout,
+  type RequestOptions,
+} from './connection.js';
 import type {
   ActionResult,
+  ApprovalSetting,
   CallerIdentity,
   DeleteResult,
   ListSessionsParams,
@@ -23,11 +30,21 @@ import { isAgentdError } from './errors.js';
 export interface ClientOptions {
   /** Where the daemon lives. A plain base URL like `http://agentd:7777` is enough; we add `/ws` for you. Defaults to the local daemon. */
   url?: string;
-  /** The public token the daemon wrote at startup. Leave it out only if the daemon runs with `--no-auth`. */
+  /**
+   * How you prove who you are. The daemon's own token makes you interface `ws`; a token from an
+   * `[interfaces.<name>]` entry makes you that interface, with its own grants and its own sessions;
+   * the admin token makes this an admin connection, which may loosen a run's approval setting and
+   * keeps its sessions apart from everyone else's. Leave it out only if the daemon runs with `--no-auth`.
+   */
   token?: string;
   /** How long to wait for the WebSocket handshake before giving up, in milliseconds. Defaults to 30 seconds. */
   connectTimeoutMs?: number;
-  /** How long to wait for a reply once connected, in milliseconds. Defaults to 11 minutes, which comfortably covers the daemon's longest allowed run. */
+  /**
+   * How long to wait for a reply once connected, in milliseconds. Defaults to 11 minutes, which comfortably
+   * covers the daemon's longest allowed `timeout_ms`. A session run without `timeout_ms` has no deadline on
+   * the daemon, so it ignores this default and waits until it finishes; pass `timeoutMs` on the call to cap
+   * it anyway. `0` waits as long as it takes for every request.
+   */
   timeoutMs?: number;
 }
 
@@ -46,6 +63,11 @@ function compact<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
 
+/** A session run with no `timeout_ms` has no deadline on the daemon, so the client should not invent one. */
+function unbounded(params: RunParams): boolean {
+  return params.session_id !== undefined && params.timeout_ms === undefined;
+}
+
 /**
  * Your handle on a running agent.d daemon.
  *
@@ -62,7 +84,7 @@ export class AgentdClient {
       url: resolveWsUrl(options.url),
       token: options.token,
       connectTimeoutMs: validateTimeout(options.connectTimeoutMs ?? 30_000, 'connectTimeoutMs'),
-      timeoutMs: validateTimeout(options.timeoutMs ?? 660_000, 'timeoutMs'),
+      timeoutMs: validateWaitTimeout(options.timeoutMs ?? 660_000, 'timeoutMs'),
     });
   }
 
@@ -114,6 +136,7 @@ export class AgentdClient {
       this.#connection.request('runners.run', compact({ ...params, stream: false }), {
         ...options,
         runner: true,
+        noDefaultTimeout: unbounded(params),
       }),
     /** Run a runner and watch the answer arrive. Iterate for deltas, then await `.result` for the finished outcome. */
     stream: (params: RunParams, options: RequestOptions = {}): RunnerStream =>
@@ -129,9 +152,22 @@ export class AgentdClient {
    * looks like it does not exist.
    */
   readonly sessions = {
-    /** Start a session. Give it a `label` (your chat id, say) when you want to find it again without keeping the uuid. */
-    create: (params: NewSessionParams = {}, options?: RequestOptions): Promise<SessionMeta> =>
-      this.request('sessions.create', compact(params), options),
+    /**
+     * Start a session. Give it a `label` (your chat id, say) when you want to find it again without keeping the uuid.
+     * With `cwd`, this rejects with an ordinary `Error` when the daemon is too old to support session folders.
+     */
+    create: async (params: NewSessionParams = {}, options?: RequestOptions): Promise<SessionMeta> => {
+      const meta = await this.request<SessionMeta>('sessions.create', compact(params), options);
+      if (params.cwd !== undefined && meta.cwd === undefined) {
+        // An older daemon ignores `cwd` and makes a session without a folder. Do not leave it behind.
+        const { session, user } = params;
+        await this.sessions.delete(meta.id, { session, user }, options).catch(() => {});
+        throw new Error(
+          'This daemon does not support session folders, so the session was not created. Upgrade agent.d, or leave out `cwd`.',
+        );
+      }
+      return meta;
+    },
     /** One session with all its stored turns, by daemon `id` or by your `label`. Rejects with `session_not_found` when there is none you may see. */
     get: (ref: SessionRef, options?: RequestOptions): Promise<Session> =>
       this.request('sessions.get', compact(ref), options),
@@ -158,6 +194,25 @@ export class AgentdClient {
     /** Sessions this caller may see, newest first. */
     list: (params: ListSessionsParams = {}, options?: RequestOptions): Promise<SessionMeta[]> =>
       this.request('sessions.list', compact(params), options),
+    /** Give a session a new `label`, or pass `null` to clear it. Fails with `session_label_taken` when another session already has that label. */
+    rename: (
+      id: string,
+      label: string | null,
+      identity: CallerIdentity = {},
+      options?: RequestOptions,
+    ): Promise<SessionMeta> => this.request('sessions.rename', compact({ id, label, ...identity }), options),
+    /**
+     * Change who answers questions for this session's runs, or pass `null` to go back to the runner's
+     * setting. It takes effect from the next run. A looser value is stored for anyone, but only applies
+     * to runs started over an admin connection.
+     */
+    setApproval: (
+      id: string,
+      approval: ApprovalSetting | null,
+      identity: CallerIdentity = {},
+      options?: RequestOptions,
+    ): Promise<SessionMeta> =>
+      this.request('sessions.set_approval', compact({ id, approval, ...identity }), options),
     /** Remove a session and every turn in it. `deleted: false` when there is none this caller may see. */
     delete: (id: string, identity: CallerIdentity = {}, options?: RequestOptions): Promise<DeleteResult> =>
       this.request('sessions.delete', compact({ id, ...identity }), options),
@@ -196,6 +251,7 @@ export class AgentdClient {
         timeoutMs: options.timeoutMs,
         signal: controller.signal,
         runner: true,
+        noDefaultTimeout: unbounded(params),
         onDelta: delta => {
           buffer.push(delta);
           notify();

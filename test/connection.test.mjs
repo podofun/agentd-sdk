@@ -73,15 +73,58 @@ test('malformed frames reject all pending requests', async t => {
     '{"ok":true,"result":1}',
     '{"id":1,"ok":true}',
     '{"id":1,"ok":false}',
-    '{"id":1,"event":"runner.delta","delta":{"type":"nope"}}',
+    '{"id":1,"event":"runner.delta","delta":{"type":"text_delta"}}',
+    '{"id":1,"event":"runner.delta","delta":{"type":"tool_result","name":"x"}}',
+    '{"id":1,"event":"runner.delta","delta":{"type":"tool_result","name":"x","input":{},"error":5}}',
+    '{"id":1,"event":"runner.delta","delta":"text"}',
   ]) {
     const f = await fixture(t, socket => socket.send(frame));
     const results = await Promise.allSettled([f.conn.request('a', {}), f.conn.request('b', {})]);
     assert.ok(
-      results.every(r => r.status === 'rejected'),
+      results.every(r => r.status === 'rejected' && !/timed out/.test(r.reason.message)),
       frame,
     );
   }
+});
+
+test('an id-less push is ignored without a handler, and the request still resolves', async t => {
+  const f = await fixture(t, (socket, req) => {
+    socket.send('{"event":"approval.request"}');
+    reply(socket, req, 'ok');
+  });
+  assert.equal(await f.conn.request('a', {}), 'ok');
+  assert.equal(await f.conn.request('b', {}), 'ok');
+  assert.equal(f.connections(), 1);
+});
+
+test('pushed events without an id go to onEvent, and a throwing handler drops the connection', async t => {
+  const seen = [];
+  const f = await fixture(
+    t,
+    (socket, req) => {
+      socket.send(JSON.stringify({ event: 'approval.request', req: { id: 1 } }));
+      socket.send(JSON.stringify({ event: 'something.new' }));
+      reply(socket, req, 'ok');
+    },
+    { overrides: { onEvent: (event, frame) => seen.push([event, frame]) } },
+  );
+  assert.equal(await f.conn.request('x', {}), 'ok');
+  assert.deepEqual(seen, [
+    ['approval.request', { event: 'approval.request', req: { id: 1 } }],
+    ['something.new', { event: 'something.new' }],
+  ]);
+
+  const disconnects = [];
+  const g = await fixture(t, socket => socket.send(JSON.stringify({ event: 'boom' })), {
+    overrides: {
+      onEvent: () => {
+        throw new Error('Broken push');
+      },
+      onDisconnect: error => disconnects.push(error.message),
+    },
+  });
+  await assert.rejects(g.conn.request('x', {}), /Broken push/);
+  assert.deepEqual(disconnects, ['Broken push']);
 });
 
 test('frames for unknown ids are ignored', async t => {
@@ -194,7 +237,8 @@ test('handshake rejection is explicit and close rejects pending and future work'
 test('pre-aborted requests, bad timeouts and unserializable params never touch the socket', async t => {
   const f = await fixture(t, () => {});
   await assert.rejects(f.conn.request('health', {}, { signal: AbortSignal.abort() }), { name: 'AbortError' });
-  await assert.rejects(f.conn.request('health', {}, { timeoutMs: 0 }), RangeError);
+  await assert.rejects(f.conn.request('health', {}, { timeoutMs: -1 }), RangeError);
+  await assert.rejects(f.conn.request('health', {}, { timeoutMs: 1.5 }), RangeError);
   await assert.rejects(f.conn.request('health', { big: 1n }), TypeError);
   await assert.rejects(f.conn.request('', {}), TypeError);
   assert.equal(f.connections(), 0);

@@ -8,11 +8,18 @@ export interface ConnectionOptions {
   token?: string;
   connectTimeoutMs: number;
   timeoutMs: number;
+  /**
+   * Called for frames the daemon pushes without a request id, such as `approval.request` on `/control`.
+   * Throwing drops the connection, so only throw for a frame that is plainly broken.
+   */
+  onEvent?: (event: string, frame: Record<string, unknown>) => void;
+  /** Called when an open or opening socket goes away, with the reason pending requests were given. */
+  onDisconnect?: (error: Error) => void;
 }
 
 export interface RequestOptions {
   signal?: AbortSignal;
-  /** Wait this long for a reply instead of the client default. */
+  /** Wait this long for a reply instead of the client default, in milliseconds. `0` waits as long as it takes. */
   timeoutMs?: number;
 }
 
@@ -21,6 +28,8 @@ export interface InternalRequestOptions extends RequestOptions {
   runner?: boolean;
   /** Called for each streaming delta that belongs to this request. Keep it quick and synchronous. */
   onDelta?: (delta: RunnerDelta) => void;
+  /** Ignore the connection's default timeout. An explicit `timeoutMs` still applies. */
+  noDefaultTimeout?: boolean;
 }
 
 interface Pending {
@@ -40,6 +49,11 @@ export function validateTimeout(value: number, label: string): number {
   return value;
 }
 
+/** Like `validateTimeout`, but `0` is allowed and means no limit. */
+export function validateWaitTimeout(value: number, label: string): number {
+  return value === 0 ? 0 : validateTimeout(value, label);
+}
+
 /** Promises should reject with an Error. Abort reasons and thrown values can be anything, so normalise them. */
 export function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
@@ -54,17 +68,24 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isDelta(value: unknown): value is RunnerDelta {
-  if (!isObject(value)) return false;
+/** Whether a runner delta is one we know, one we do not (skipped, so a newer daemon cannot break you), or broken. */
+function classifyDelta(value: unknown): 'known' | 'unknown' | 'invalid' {
+  if (!isObject(value) || typeof value.type !== 'string') return 'invalid';
   switch (value.type) {
     case 'text_delta':
-      return typeof value.text === 'string';
+      return typeof value.text === 'string' ? 'known' : 'invalid';
     case 'tool_call':
-      return typeof value.name === 'string';
+      return typeof value.name === 'string' ? 'known' : 'invalid';
+    case 'tool_result':
+      return typeof value.name === 'string' &&
+        Object.hasOwn(value, 'input') &&
+        (value.error === undefined || typeof value.error === 'string')
+        ? 'known'
+        : 'invalid';
     case 'turn_end':
-      return true;
+      return 'known';
     default:
-      return false;
+      return 'unknown';
   }
 }
 
@@ -92,7 +113,7 @@ export class Connection {
 
   constructor(options: ConnectionOptions) {
     validateTimeout(options.connectTimeoutMs, 'connectTimeoutMs');
-    validateTimeout(options.timeoutMs, 'timeoutMs');
+    validateWaitTimeout(options.timeoutMs, 'timeoutMs');
     const { token, ...rest } = options;
     if (token !== undefined && (!token.trim() || /[\r\n]/.test(token))) {
       throw new TypeError('Invalid bearer token');
@@ -157,7 +178,10 @@ export class Connection {
 
   async request<T>(method: string, params: unknown, options: InternalRequestOptions = {}): Promise<T> {
     if (typeof method !== 'string' || !method) throw new TypeError('An RPC method name is required');
-    const timeout = validateTimeout(options.timeoutMs ?? this.options.timeoutMs, 'timeoutMs');
+    const timeout = validateWaitTimeout(
+      options.timeoutMs ?? (options.noDefaultTimeout ? 0 : this.options.timeoutMs),
+      'timeoutMs',
+    );
     options.signal?.throwIfAborted();
     const encodedParams = JSON.stringify(params ?? null);
     if (encodedParams === undefined) throw new TypeError('Params must be JSON serializable');
@@ -185,10 +209,10 @@ export class Connection {
 
     return new Promise<T>((resolve, reject) => {
       const abort = () => this.settle(id, options.signal!.reason);
-      const timer = setTimeout(
-        () => this.settle(id, new Error(`Request timed out after ${timeout} ms`)),
-        timeout,
-      );
+      const timer =
+        timeout === 0
+          ? undefined
+          : setTimeout(() => this.settle(id, new Error(`Request timed out after ${timeout} ms`)), timeout);
       const cleanup = () => {
         clearTimeout(timer);
         options.signal?.removeEventListener('abort', abort);
@@ -234,6 +258,7 @@ export class Connection {
     }
     this.pending.clear();
     socket?.terminate();
+    if (socket) this.options.onDisconnect?.(error);
   }
 
   /** Give up on one request from our side. If it was a runner, also ask the daemon to stop it. */
@@ -261,6 +286,14 @@ export class Connection {
       this.disconnect(new Error('Invalid JSON from daemon'));
       return;
     }
+    if (isObject(frame) && typeof frame.event === 'string' && !Object.hasOwn(frame, 'id')) {
+      try {
+        this.options.onEvent?.(frame.event, frame);
+      } catch (error) {
+        this.disconnect(toError(error));
+      }
+      return;
+    }
     if (!isObject(frame) || !Number.isSafeInteger(frame.id)) {
       this.disconnect(new Error('Invalid frame from daemon: missing id'));
       return;
@@ -269,13 +302,14 @@ export class Connection {
     const pending = this.pending.get(id);
 
     if (frame.event === 'runner.delta') {
-      if (!isDelta(frame.delta)) {
+      const kind = classifyDelta(frame.delta);
+      if (kind === 'invalid') {
         this.disconnect(new Error('Invalid runner delta from daemon'));
         return;
       }
-      if (!pending) return;
+      if (!pending || kind === 'unknown') return;
       try {
-        pending.onDelta?.(frame.delta);
+        pending.onDelta?.(frame.delta as RunnerDelta);
       } catch (error) {
         this.settle(id, error);
       }
