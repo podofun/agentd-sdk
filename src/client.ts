@@ -152,9 +152,22 @@ export class AgentdClient {
    * looks like it does not exist.
    */
   readonly sessions = {
-    /** Start a session. Give it a `label` (your chat id, say) when you want to find it again without keeping the uuid. */
-    create: (params: NewSessionParams = {}, options?: RequestOptions): Promise<SessionMeta> =>
-      this.request('sessions.create', compact(params), options),
+    /**
+     * Start a session. Give it a `label` (your chat id, say) when you want to find it again without keeping the uuid.
+     * With `cwd`, this rejects with an ordinary `Error` when the daemon is too old to support session folders.
+     */
+    create: async (params: NewSessionParams = {}, options?: RequestOptions): Promise<SessionMeta> => {
+      const meta = await this.request<SessionMeta>('sessions.create', compact(params), options);
+      if (params.cwd !== undefined && meta.cwd === undefined) {
+        // An older daemon ignores `cwd` and makes a session without a folder. Do not leave it behind.
+        const { session, user } = params;
+        await this.sessions.delete(meta.id, { session, user }, options).catch(() => {});
+        throw new Error(
+          'This daemon does not support session folders, so the session was not created. Upgrade agent.d, or leave out `cwd`.',
+        );
+      }
+      return meta;
+    },
     /** One session with all its stored turns, by daemon `id` or by your `label`. Rejects with `session_not_found` when there is none you may see. */
     get: (ref: SessionRef, options?: RequestOptions): Promise<Session> =>
       this.request('sessions.get', compact(ref), options),

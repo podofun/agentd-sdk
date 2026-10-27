@@ -32,9 +32,9 @@ test('each namespace method sends the matching protocol method and params', asyn
     [() => c.sessions.list(), 'sessions.list', {}],
     [() => c.sessions.list({ limit: 5, user: 'u' }), 'sessions.list', { limit: 5, user: 'u' }],
     [
-      () => c.sessions.create({ label: 'tg-2', approval: 'nobody', cwd: '/work/app' }),
+      () => c.sessions.create({ label: 'tg-2', approval: 'nobody' }),
       'sessions.create',
-      { label: 'tg-2', approval: 'nobody', cwd: '/work/app' },
+      { label: 'tg-2', approval: 'nobody' },
     ],
     [() => c.sessions.rename('abc', 'bugfix'), 'sessions.rename', { id: 'abc', label: 'bugfix' }],
     [() => c.sessions.rename('abc', null), 'sessions.rename', { id: 'abc', label: null }],
@@ -322,4 +322,30 @@ test('timeoutMs 0 means wait as long as it takes', async t => {
   t.after(() => capped.close());
   assert.equal(await capped.health({ timeoutMs: 0 }), 'ok');
   await assert.rejects(capped.health(), /timed out after 50 ms/);
+});
+
+test('a daemon that ignores cwd is reported, and the folderless session is removed', async t => {
+  const f = await fixture(t, (socket, req) => {
+    if (req.method === 'sessions.get') return fail(socket, req, { code: 'session_not_found', error: 'none' });
+    if (req.method === 'sessions.delete') return reply(socket, req, { deleted: true });
+    // An older daemon accepts the unknown `cwd` field and creates a session without a folder.
+    return reply(socket, req, { ...meta, id: 'no-folder', label: req.params.label, cwd: undefined });
+  });
+  await assert.rejects(f.client.sessions.create({ cwd: '/work/app', user: 'u' }), e => {
+    assert.ok(!isAgentdError(e));
+    assert.match(e.message, /does not support session folders/);
+    return true;
+  });
+  assert.deepEqual(f.requests[1], {
+    id: f.requests[1].id,
+    method: 'sessions.delete',
+    params: { id: 'no-folder', user: 'u' },
+  });
+  await assert.rejects(
+    f.client.sessions.open('chat-2', { cwd: '/work/app' }),
+    /does not support session folders/,
+  );
+  assert.deepEqual(f.requests.at(-1).params, { id: 'no-folder' });
+  // Without cwd nothing changes.
+  assert.equal((await f.client.sessions.create({ label: 'plain' })).id, 'no-folder');
 });

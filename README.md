@@ -144,7 +144,7 @@ const session = await client.sessions.create({ label: 'repo-chat', cwd: '/home/a
 console.log(session.cwd);
 ```
 
-The daemon asks an approver once before it trusts a folder it does not know (see [Answer approval requests](#answer-approval-requests)), and remembers it for good if they choose "allow forever". If nobody approves, the call fails with `session_folder_denied`. A relative path, a folder that does not exist, or a request from an interface token fails with `session_folder_not_allowed`, because only the daemon's own token and admin connections may pick a folder. This needs a daemon release that supports session folders.
+The daemon asks an approver once before it trusts a folder it does not know (see [Answer approval requests](#answer-approval-requests)), and remembers it for good if they choose "allow forever". If nobody approves, the call fails with `session_folder_denied`. A relative path, a folder that does not exist, or a request from an interface token fails with `session_folder_not_allowed`, because only the daemon's own token and admin connections may pick a folder. This needs a daemon release that supports session folders. On an older daemon, `sessions.create` and `sessions.open` reject with an error that says so, rather than quietly making a session without the folder.
 
 ### Session ownership
 

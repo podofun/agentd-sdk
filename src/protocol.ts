@@ -1,5 +1,6 @@
 /**
- * The shapes that travel over the wire between you and agent.d 0.10.0-alpha.
+ * The shapes that travel over the wire between you and agent.d, as of the 0.10 alpha protocol.
+ * A few fields need a newer daemon than the first 0.10 alpha; their comments say so.
  *
  * These mirror the daemon's Rust structs field for field, snake_case included, so what you
  * see here is exactly what the daemon sends and expects. Treat this file as the protocol reference.
@@ -248,7 +249,8 @@ export interface NewSessionParams extends CallerIdentity {
   /** Who answers questions for runs in this session. `classifier` fails with `classifier_not_configured` when the daemon has none. */
   approval?: ApprovalSetting;
   /**
-   * The absolute folder this session's runs work in. Only the daemon token or an admin connection may set it,
+   * The absolute folder this session's runs work in. Needs a daemon with session folders; on an older one
+   * `sessions.create` rejects rather than quietly ignoring it. Only the daemon token or an admin connection may set it,
    * and the daemon asks an approver once before trusting a folder it does not know. A refusal fails with
    * `session_folder_denied`; a folder that is not allowed at all fails with `session_folder_not_allowed`.
    */

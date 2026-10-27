@@ -220,6 +220,17 @@ test('a real daemon', { skip: !bin }, async t => {
     await client.sessions.delete(strict.id, { user: 'alice' });
   });
 
+  await t.test('cwd is never silently dropped', async () => {
+    // An older daemon ignores the field, so the SDK reports that; a newer one asks an approver, and none is connected.
+    await assert.rejects(
+      client.sessions.create({ label: 'folder-1', cwd: daemon.work }),
+      e => /does not support session folders/.test(e.message) || isAgentdError(e, 'session_folder_denied'),
+    );
+    await assert.rejects(client.sessions.get({ label: 'folder-1' }), e =>
+      isAgentdError(e, 'session_not_found'),
+    );
+  });
+
   await t.test('a mock/ model has no provider, and loosening approval needs the admin token', async () => {
     await assert.rejects(client.runners.run({ name: 'mocky', prompt: 'hi' }), e => {
       assert.ok(isAgentdError(e, 'no_provider'));
