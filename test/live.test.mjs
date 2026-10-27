@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { AgentdClient, AgentdControl, isAgentdError, probeHealth, probeReady } from '../dist/index.js';
 import { startDaemon, ADMIN_TOKEN, BOT_TOKEN, DAEMON_TOKEN } from './helpers/daemon.mjs';
 import { startFakeOpenAI } from './helpers/openai.mjs';
@@ -78,6 +80,7 @@ function model(body) {
   const lastUserIndex = messages.findLastIndex(m => m.role === 'user');
   const lastUser = messages[lastUserIndex]?.content ?? '';
   if (lastUser.includes('hang')) return { hang: true };
+  if (lastUser.includes('break the model')) throw new Error('the scripted model broke');
   const toolsThisRun = messages.slice(lastUserIndex).filter(m => m.role === 'tool').length;
   if (lastUser.includes('use the tools')) {
     if (toolsThisRun === 0) return { tool: 'demo.secret', args: { why: 'testing' } };
@@ -264,6 +267,18 @@ test('a real daemon', { skip: !bin }, async t => {
     assert.ok(out.usage.input_tokens > 0);
   });
 
+  await t.test('a failing model endpoint surfaces as provider_upstream with its status', async () => {
+    await assert.rejects(client.runners.run({ name: 'chat', prompt: 'please break the model' }), e => {
+      assert.ok(isAgentdError(e, 'provider_upstream'), String(e));
+      assert.equal(e.providerStatus, 500);
+      return true;
+    });
+    assert.equal(
+      (await client.runners.run({ name: 'chat', prompt: 'still there?' })).text,
+      'You said: still there?',
+    );
+  });
+
   await t.test('streaming a session run shows tool calls and redacted tool results', async () => {
     const session = await client.sessions.create({ label: 'stream-1' });
     const stream = client.runners.stream({
@@ -384,6 +399,20 @@ test('a real daemon', { skip: !bin }, async t => {
   await t.test('the trace file records the requests', async () => {
     assert.match(await daemon.trace(), /demo\.echo/);
   });
+});
+
+test('daemon startup retries once when its port was taken', { skip: !bin }, async t => {
+  // Holds the port and drops anything that connects, so readiness probes fail fast and close() never waits.
+  const squatter = createServer(socket => socket.destroy());
+  squatter.listen(0, '127.0.0.1');
+  await once(squatter, 'listening');
+  t.after(() => new Promise(resolve => squatter.close(resolve)));
+  const daemon = await startDaemon(t, bin, { init: '', port: squatter.address().port });
+  assert.equal(daemon.attempts, 2);
+  assert.notEqual(new URL(daemon.url).port, String(squatter.address().port));
+  const client = new AgentdClient({ url: daemon.url, token: DAEMON_TOKEN });
+  t.after(() => client.close());
+  assert.equal(await client.health(), 'ok');
 });
 
 test('session folders on a daemon that supports them', { skip: !cwdBin }, async t => {

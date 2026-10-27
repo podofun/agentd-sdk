@@ -14,7 +14,16 @@ import { createServer } from 'node:http';
 export async function startFakeOpenAI(t, reply) {
   const requests = [];
   const open = new Set();
-  const server = createServer(async (req, res) => {
+  const server = createServer((req, res) => {
+    // A broken script or request should fail the run with a clear upstream error, not crash the test process.
+    respond(req, res).catch(error => {
+      if (res.headersSent) return res.destroy(error);
+      res.statusCode = 500;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { message: `Fake model endpoint failed: ${error.message}` } }));
+    });
+  });
+  const respond = async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
@@ -68,7 +77,7 @@ export async function startFakeOpenAI(t, reply) {
     }
     send({ model: body.model, choices: [], usage });
     res.end('data: [DONE]\n\n');
-  });
+  };
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(async () => {
