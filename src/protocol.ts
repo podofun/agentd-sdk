@@ -34,6 +34,12 @@ export type ErrorCode =
   | 'session_label_taken'
   | 'session_store'
   | 'sessions_unavailable'
+  | 'session_folder_not_allowed'
+  | 'session_folder_denied'
+  | 'runner_turn_limit'
+  | 'approval_forbidden'
+  | 'classifier_not_configured'
+  | 'invalid'
   | (string & {});
 
 export interface RequestFrame {
@@ -136,6 +142,14 @@ export interface ActionResult<T = unknown> {
 
 // ---- runners ----
 
+/**
+ * Who answers the questions a run raises when it reaches for something it was not granted.
+ * `human` sends them to an approver on `/control`, `classifier` lets the runner named in
+ * `[approval].classifier` decide (falling back to a human when unsure), and `nobody` refuses
+ * without asking. From strictest to loosest: `nobody`, `human`, `classifier`.
+ */
+export type ApprovalSetting = 'human' | 'classifier' | 'nobody';
+
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ToolCall {
@@ -173,8 +187,16 @@ export interface RunParams extends CallerIdentity {
   model?: string;
   /** Cap on output tokens, 1 to 32768. Not every provider honours it. */
   max_tokens?: number;
-  /** How long the daemon lets the whole run take, in milliseconds. 1 to 600000; defaults to two minutes. */
+  /**
+   * How long the daemon lets the whole run take, in milliseconds, 1 to 600000. A run without `session_id`
+   * defaults to two minutes. A session run has no deadline unless you set one, and no turn limit either.
+   */
   timeout_ms?: number;
+  /**
+   * Who answers this run's questions. You may always pick something stricter than the runner and session
+   * allow. Something looser fails with `approval_forbidden` unless you connected with the admin token.
+   */
+  approval?: ApprovalSetting;
 }
 
 export interface Usage {
@@ -223,6 +245,14 @@ export interface NewSessionParams extends CallerIdentity {
   label?: string;
   /** Which runner this session is for. Informational only; any runner can run against any session. */
   runner?: string;
+  /** Who answers questions for runs in this session. `classifier` fails with `classifier_not_configured` when the daemon has none. */
+  approval?: ApprovalSetting;
+  /**
+   * The absolute folder this session's runs work in. Only the daemon token or an admin connection may set it,
+   * and the daemon asks an approver once before trusting a folder it does not know. A refusal fails with
+   * `session_folder_denied`; a folder that is not allowed at all fails with `session_folder_not_allowed`.
+   */
+  cwd?: string;
 }
 
 /** `sessions.list`. */
@@ -250,6 +280,12 @@ export interface SessionMeta {
   next_seq: number;
   /** How many times old turns were folded into a summary. */
   compactions: number;
+  /** Tokens every run in this session has used so far. Sessions older than this field count from zero. */
+  usage: Usage;
+  /** Who answers questions for runs in this session, when it was set. */
+  approval?: ApprovalSetting;
+  /** The real, absolute folder this session's runs work in, when one was chosen and trusted. */
+  cwd?: string;
 }
 
 export interface Session extends SessionMeta {
