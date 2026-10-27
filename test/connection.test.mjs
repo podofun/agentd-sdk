@@ -77,15 +77,24 @@ test('malformed frames reject all pending requests', async t => {
     '{"id":1,"event":"runner.delta","delta":{"type":"tool_result","name":"x"}}',
     '{"id":1,"event":"runner.delta","delta":{"type":"tool_result","name":"x","input":{},"error":5}}',
     '{"id":1,"event":"runner.delta","delta":"text"}',
-    '{"event":"approval.request"}',
   ]) {
     const f = await fixture(t, socket => socket.send(frame));
     const results = await Promise.allSettled([f.conn.request('a', {}), f.conn.request('b', {})]);
     assert.ok(
-      results.every(r => r.status === 'rejected'),
+      results.every(r => r.status === 'rejected' && !/timed out/.test(r.reason.message)),
       frame,
     );
   }
+});
+
+test('an id-less push is ignored without a handler, and the request still resolves', async t => {
+  const f = await fixture(t, (socket, req) => {
+    socket.send('{"event":"approval.request"}');
+    reply(socket, req, 'ok');
+  });
+  assert.equal(await f.conn.request('a', {}), 'ok');
+  assert.equal(await f.conn.request('b', {}), 'ok');
+  assert.equal(f.connections(), 1);
 });
 
 test('pushed events without an id go to onEvent, and a throwing handler drops the connection', async t => {
