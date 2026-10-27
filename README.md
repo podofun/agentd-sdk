@@ -242,25 +242,40 @@ To set it for every run in a conversation, pass `approval` to `sessions.create`,
 
 ## Answer approval requests
 
-An approver is any program connected to the daemon's approval plane with the admin token. `AgentdControl` is that connection. Listen with `approvals.requests()` and answer each request with `approvals.resolve`:
+An approver is any program connected to the daemon's approval plane with the admin token. `AgentdControl` is that connection. Listen with `approvals.requests()` and answer each request with `approvals.resolve`.
+
+A good approver says no unless it has a reason to say yes. This one lets runs reach two hosts it trusts and work inside one projects folder, and refuses everything else:
 
 ```ts
-import { AgentdControl } from '@podofun/agentd-sdk';
+import { AgentdControl, type ApprovalRequest, type Verdict } from '@podofun/agentd-sdk';
+
+const trustedHosts = new Set(['net:api.github.com', 'net:registry.npmjs.org']);
+const projects = '/home/alice/code/';
+
+function decide(request: ApprovalRequest): Verdict {
+  if (request.kind === 'folder') {
+    return request.detail.folder.startsWith(projects) ? 'allow_once' : 'deny';
+  }
+  if (request.kind === 'missing_grant' && request.missing.length > 0) {
+    return request.missing.every(permission => trustedHosts.has(permission)) ? 'allow_once' : 'deny';
+  }
+  return 'deny';
+}
 
 const control = new AgentdControl({
   url: process.env.AGENTD_URL,
   adminToken: process.env.AGENTD_ADMIN_TOKEN,
 });
+await control.connect();
 
 for await (const request of control.approvals.requests()) {
-  if (request.kind === 'folder') {
-    console.log(`Work in ${request.detail.folder}?`);
-  } else {
-    console.log(`${request.action} wants ${request.missing.join(', ')}: ${request.reason}`);
-  }
-  await control.approvals.resolve(request.id, 'allow_once');
+  const verdict = decide(request);
+  console.log(`${verdict}: ${request.action} (${request.reason})`);
+  await control.approvals.resolve(request.id, verdict);
 }
 ```
+
+`connect()` resolves once the daemon has confirmed the subscription, so every question asked after that reaches you. The loop connects on its own too, but awaiting `connect()` first means a bad URL or token fails right at startup.
 
 Every request has a `kind`. `missing_grant` means a tool lacks permissions, `confirm` means the action always asks first, `runner_action` means a runner called an action outside its list, and `folder` means a client wants a session to work in a folder nobody has trusted yet. `detail` shows what the call is about to do, with secrets replaced by their names, and `caller` shows who asked. When `warning` is present, show it before offering "allow forever".
 
