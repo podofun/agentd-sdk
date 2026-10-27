@@ -1,6 +1,7 @@
 import { Connection, toError, validateTimeout, type RequestOptions } from './connection.js';
 import type {
   ActionResult,
+  ApprovalSetting,
   CallerIdentity,
   DeleteResult,
   ListSessionsParams,
@@ -23,7 +24,12 @@ import { isAgentdError } from './errors.js';
 export interface ClientOptions {
   /** Where the daemon lives. A plain base URL like `http://agentd:7777` is enough; we add `/ws` for you. Defaults to the local daemon. */
   url?: string;
-  /** The public token the daemon wrote at startup. Leave it out only if the daemon runs with `--no-auth`. */
+  /**
+   * How you prove who you are. The daemon's own token makes you interface `ws`; a token from an
+   * `[interfaces.<name>]` entry makes you that interface, with its own grants and its own sessions;
+   * the admin token makes this an admin connection, which may loosen a run's approval setting and
+   * keeps its sessions apart from everyone else's. Leave it out only if the daemon runs with `--no-auth`.
+   */
   token?: string;
   /** How long to wait for the WebSocket handshake before giving up, in milliseconds. Defaults to 30 seconds. */
   connectTimeoutMs?: number;
@@ -158,6 +164,25 @@ export class AgentdClient {
     /** Sessions this caller may see, newest first. */
     list: (params: ListSessionsParams = {}, options?: RequestOptions): Promise<SessionMeta[]> =>
       this.request('sessions.list', compact(params), options),
+    /** Give a session a new `label`, or pass `null` to clear it. Fails with `session_label_taken` when another session already has that label. */
+    rename: (
+      id: string,
+      label: string | null,
+      identity: CallerIdentity = {},
+      options?: RequestOptions,
+    ): Promise<SessionMeta> => this.request('sessions.rename', compact({ id, label, ...identity }), options),
+    /**
+     * Change who answers questions for this session's runs, or pass `null` to go back to the runner's
+     * setting. It takes effect from the next run. A looser value is stored for anyone, but only applies
+     * to runs started over an admin connection.
+     */
+    setApproval: (
+      id: string,
+      approval: ApprovalSetting | null,
+      identity: CallerIdentity = {},
+      options?: RequestOptions,
+    ): Promise<SessionMeta> =>
+      this.request('sessions.set_approval', compact({ id, approval, ...identity }), options),
     /** Remove a session and every turn in it. `deleted: false` when there is none this caller may see. */
     delete: (id: string, identity: CallerIdentity = {}, options?: RequestOptions): Promise<DeleteResult> =>
       this.request('sessions.delete', compact({ id, ...identity }), options),

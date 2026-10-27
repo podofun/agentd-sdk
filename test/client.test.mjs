@@ -31,6 +31,29 @@ test('each namespace method sends the matching protocol method and params', asyn
     [() => c.sessions.get({ label: 'tg-1', user: 'u' }), 'sessions.get', { label: 'tg-1', user: 'u' }],
     [() => c.sessions.list(), 'sessions.list', {}],
     [() => c.sessions.list({ limit: 5, user: 'u' }), 'sessions.list', { limit: 5, user: 'u' }],
+    [
+      () => c.sessions.create({ label: 'tg-2', approval: 'nobody', cwd: '/work/app' }),
+      'sessions.create',
+      { label: 'tg-2', approval: 'nobody', cwd: '/work/app' },
+    ],
+    [() => c.sessions.rename('abc', 'bugfix'), 'sessions.rename', { id: 'abc', label: 'bugfix' }],
+    [() => c.sessions.rename('abc', null), 'sessions.rename', { id: 'abc', label: null }],
+    [
+      () => c.sessions.rename('abc', 'x', { user: 'u', session: 's' }),
+      'sessions.rename',
+      { id: 'abc', label: 'x', user: 'u', session: 's' },
+    ],
+    [
+      () => c.sessions.setApproval('abc', 'classifier'),
+      'sessions.set_approval',
+      { id: 'abc', approval: 'classifier' },
+    ],
+    [() => c.sessions.setApproval('abc', null), 'sessions.set_approval', { id: 'abc', approval: null }],
+    [
+      () => c.sessions.setApproval('abc', 'nobody', { user: 'u' }),
+      'sessions.set_approval',
+      { id: 'abc', approval: 'nobody', user: 'u' },
+    ],
     [() => c.sessions.delete('abc'), 'sessions.delete', { id: 'abc' }],
     [() => c.sessions.delete('abc', { user: 'u' }), 'sessions.delete', { id: 'abc', user: 'u' }],
     [() => c.request('custom.method', { a: 1 }), 'custom.method', { a: 1 }],
@@ -174,4 +197,87 @@ test('the bearer token never appears when the client is logged or serialised', t
   const dumps = [util.inspect(client, { depth: 20 }), JSON.stringify(client), String(client)];
   for (const dump of dumps) assert.ok(!dump.includes(token), dump);
   assert.deepEqual(Object.keys(client), ['tools', 'actions', 'runners', 'sessions', 'skills', 'services']);
+});
+
+const meta = {
+  id: 'abc',
+  owner: 'interface:ws',
+  label: 'bugfix',
+  approval: 'nobody',
+  cwd: '/work/app',
+  created_at: 1,
+  updated_at: 2,
+  turn_count: 4,
+  next_seq: 4,
+  compactions: 0,
+  usage: {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_read_input_tokens: 2,
+    cache_creation_input_tokens: 1,
+  },
+};
+
+test('session metadata comes back with usage, approval and cwd intact', async t => {
+  const f = await fixture(t, (socket, req) =>
+    reply(socket, req, req.method === 'sessions.list' ? [meta] : meta),
+  );
+  assert.deepEqual(await f.client.sessions.rename('abc', 'bugfix'), meta);
+  assert.deepEqual(await f.client.sessions.setApproval('abc', 'nobody'), meta);
+  assert.deepEqual(await f.client.sessions.list(), [meta]);
+  assert.equal((await f.client.sessions.create({ cwd: '/work/app' })).cwd, '/work/app');
+});
+
+test('runners.run sends the approval setting', async t => {
+  const f = await fixture(t, (socket, req) =>
+    reply(socket, req, { text: 'ok', provider: 'p', model: null, stop_reason: null }),
+  );
+  await f.client.runners.run({ name: 'r', prompt: 'hi', approval: 'classifier' });
+  assert.deepEqual(f.requests[0].params, { name: 'r', prompt: 'hi', approval: 'classifier', stream: false });
+});
+
+test('approval, folder and turn limit errors keep their codes and tips', async t => {
+  const codes = [
+    'approval_forbidden',
+    'classifier_not_configured',
+    'runner_turn_limit',
+    'session_folder_not_allowed',
+    'session_folder_denied',
+  ];
+  let next = 0;
+  const f = await fixture(t, (socket, req) =>
+    fail(socket, req, { code: codes[next++], error: 'Refused.', tip: 'Try something else.' }),
+  );
+  await assert.rejects(f.client.runners.run({ name: 'r', prompt: 'hi', approval: 'classifier' }), e =>
+    isAgentdError(e, 'approval_forbidden'),
+  );
+  await assert.rejects(f.client.sessions.setApproval('abc', 'classifier'), e =>
+    isAgentdError(e, 'classifier_not_configured'),
+  );
+  await assert.rejects(f.client.runners.run({ name: 'r', prompt: 'hi' }), e =>
+    isAgentdError(e, 'runner_turn_limit'),
+  );
+  await assert.rejects(f.client.sessions.create({ cwd: 'relative' }), e =>
+    isAgentdError(e, 'session_folder_not_allowed'),
+  );
+  await assert.rejects(f.client.sessions.create({ cwd: '/elsewhere' }), e => {
+    assert.ok(isAgentdError(e, 'session_folder_denied'));
+    assert.equal(e.tip, 'Try something else.');
+    return true;
+  });
+});
+
+test('sessions.open passes approval and cwd through to create', async t => {
+  const f = await fixture(t, (socket, req) =>
+    req.method === 'sessions.get'
+      ? fail(socket, req, { code: 'session_not_found', error: 'none' })
+      : reply(socket, req, { ...meta, label: req.params.label }),
+  );
+  await f.client.sessions.open('chat-1', { user: 'u', approval: 'nobody', cwd: '/work/app' });
+  assert.deepEqual(f.requests[1].params, {
+    label: 'chat-1',
+    user: 'u',
+    approval: 'nobody',
+    cwd: '/work/app',
+  });
 });
