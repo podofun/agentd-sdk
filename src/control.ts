@@ -19,7 +19,7 @@ export interface ControlOptions {
   timeoutMs?: number;
 }
 
-export interface ListenOptions {
+export interface ApprovalRequestsOptions {
   /** Stop listening when this aborts. The loop ends quietly. */
   signal?: AbortSignal;
 }
@@ -73,6 +73,8 @@ export class AgentdControl {
   readonly #connection: Connection;
   readonly #listeners = new Set<Listener>();
   #closed = false;
+  /** Settles once the daemon has acknowledged a subscription on the current socket. Reset when it drops. */
+  #subscribed?: Promise<void>;
 
   constructor(options: ControlOptions = {}) {
     this.#connection = new Connection({
@@ -86,14 +88,28 @@ export class AgentdControl {
         if (request) for (const listener of this.#listeners) listener.push(request);
       },
       onDisconnect: error => {
+        this.#subscribed = undefined;
         for (const listener of [...this.#listeners]) listener.end(this.#closed ? undefined : error);
       },
     });
   }
 
-  /** Connect now, which also starts the flow of approval requests. Handy for failing fast on a bad URL or token. */
+  /**
+   * Connect now and wait until the daemon has acknowledged the subscription, so every question asked after
+   * this resolves reaches you. Handy for failing fast on a bad URL or token. Safe to call repeatedly.
+   */
   connect(): Promise<void> {
-    return this.#connection.connect();
+    if (!this.#subscribed) {
+      const subscribed = this.#connection
+        .connect()
+        .then(() => this.#connection.request('approvals.subscribe', {}))
+        .then(() => {});
+      subscribed.catch(() => {
+        if (this.#subscribed === subscribed) this.#subscribed = undefined;
+      });
+      this.#subscribed = subscribed;
+    }
+    return this.#subscribed;
   }
 
   /** Hang up. Every `requests()` loop ends quietly and pending calls reject. */
@@ -115,16 +131,16 @@ export class AgentdControl {
     resolve: (requestId: number, verdict: Verdict, options?: RequestOptions): Promise<ResolveResult> =>
       this.#connection.request('approvals.resolve', { request_id: requestId, verdict }, options),
     /**
-     * Every approval request the daemon sends from now on, as they arrive. Connects if needed. The loop
+     * Every approval request the daemon sends from now on, as they arrive. Connects and subscribes if needed. The loop
      * ends when you break out, abort the signal or close the control client, and throws if the
      * connection drops.
      */
-    requests: (options: ListenOptions = {}): AsyncIterable<ApprovalRequest> => ({
-      [Symbol.asyncIterator]: () => this.listen(options),
+    requests: (options: ApprovalRequestsOptions = {}): AsyncIterable<ApprovalRequest> => ({
+      [Symbol.asyncIterator]: () => this.#listen(options),
     }),
   };
 
-  private listen(options: ListenOptions): AsyncIterator<ApprovalRequest> {
+  #listen(options: ApprovalRequestsOptions): AsyncIterator<ApprovalRequest> {
     const buffer: ApprovalRequest[] = [];
     let wake: (() => void) | undefined;
     let done = false;
@@ -154,7 +170,7 @@ export class AgentdControl {
     else {
       this.#listeners.add(listener);
       options.signal?.addEventListener('abort', stop, { once: true });
-      this.#connection.connect().catch((error: unknown) => listener.end(toError(error)));
+      this.connect().catch((error: unknown) => listener.end(toError(error)));
     }
 
     return {

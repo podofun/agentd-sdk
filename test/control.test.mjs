@@ -34,7 +34,11 @@ const folder = {
 
 const push = (socket, req) => socket.send(JSON.stringify({ event: 'approval.request', req }));
 
-async function fixture(t, handler = () => {}, onConnect = () => {}) {
+const acknowledge = (socket, req) => {
+  if (req.method === 'approvals.subscribe') reply(socket, req, { subscribed: true });
+};
+
+async function fixture(t, handler = acknowledge, onConnect = () => {}) {
   const server = await startServer(t, handler, { path: '/control' });
   const control = new AgentdControl({ url: server.url, adminToken: TOKEN, timeoutMs: 1000 });
   t.after(() => control.close());
@@ -67,6 +71,42 @@ test('connects to /control with the admin token and sends subscribe and resolve'
     ],
   );
   assert.equal(f.connections(), 1);
+});
+
+test('connect() and the start of requests() prove the subscription with a round trip', async t => {
+  const f = await fixture(t);
+  await f.control.connect();
+  await f.control.connect();
+  assert.deepEqual(
+    f.requests.map(r => r.method),
+    ['approvals.subscribe'],
+  );
+
+  // After a drop, connecting again subscribes again.
+  [...f.clients].at(-1).terminate();
+  await new Promise(r => setTimeout(r, 20));
+  await f.control.connect();
+  assert.deepEqual(
+    f.requests.map(r => r.method),
+    ['approvals.subscribe', 'approvals.subscribe'],
+  );
+  assert.equal(f.connections(), 2);
+
+  const g = await fixture(t);
+  const iterator = g.control.approvals.requests()[Symbol.asyncIterator]();
+  const first = iterator.next();
+  for (let i = 0; i < 100 && g.requests.length === 0; i++) await new Promise(r => setTimeout(r, 5));
+  assert.equal(g.requests[0].method, 'approvals.subscribe');
+  push([...g.clients].at(-1), folder);
+  assert.deepEqual((await first).value, folder);
+});
+
+test('a refused subscription fails connect() and the requests() loop', async t => {
+  const f = await fixture(t, (socket, req) =>
+    fail(socket, req, { code: 'invalid', error: 'No approvals here.' }),
+  );
+  await assert.rejects(f.control.connect(), /No approvals here/);
+  await assert.rejects(f.control.approvals.requests()[Symbol.asyncIterator]().next(), /No approvals here/);
 });
 
 test('requests() yields every pushed approval request, folder questions included', async t => {

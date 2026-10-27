@@ -2,6 +2,7 @@
 import type {
   AgentdClient,
   AgentdControl,
+  ApprovalRequestsOptions,
   ApprovalRequest,
   ApprovalSetting,
   ErrorCode,
@@ -67,7 +68,8 @@ export async function useSessions(client: AgentdClient): Promise<number> {
 }
 
 export async function answer(control: AgentdControl): Promise<void> {
-  for await (const request of control.approvals.requests()) {
+  const options: ApprovalRequestsOptions = { signal: AbortSignal.timeout(60_000) };
+  for await (const request of control.approvals.requests(options)) {
     const verdict: Verdict = request.kind === 'folder' ? 'deny' : 'allow_once';
     const { resolved }: { resolved: number } = await control.approvals.resolve(request.id, verdict);
     void resolved;

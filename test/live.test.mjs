@@ -349,6 +349,8 @@ test('a real daemon', { skip: !bin }, async t => {
     const control = new AgentdControl({ url: daemon.url, adminToken: ADMIN_TOKEN });
     t2.after(() => control.close());
     const requests = control.approvals.requests()[Symbol.asyncIterator]();
+    // Resolves once the daemon has acknowledged the subscription, so the next question reaches us.
+    await control.connect();
     assert.deepEqual(await control.approvals.subscribe(), { subscribed: true });
 
     const allowed = client.actions.call('locked.peek', {}, { user: 'bob' });
@@ -433,6 +435,7 @@ test('session folders on a daemon that supports them', { skip: !cwdBin }, async 
         await control.approvals.resolve(request.id, answers.shift() ?? 'deny');
       }
     })();
+    // Without this round trip, a question asked right after the handshake could be refused unseen.
     await control.connect();
 
     const app = await folder('app');

@@ -1,7 +1,7 @@
 export { AgentdClient } from './client.js';
 export type { ClientOptions, CallOptions, RunnerStream } from './client.js';
 export { AgentdControl } from './control.js';
-export type { ControlOptions, ListenOptions } from './control.js';
+export type { ControlOptions, ApprovalRequestsOptions } from './control.js';
 export type { RequestOptions } from './connection.js';
 export { AgentdError, isAgentdError } from './errors.js';
 export { resolveWsUrl, resolveHttpUrl, resolveControlUrl } from './url.js';
