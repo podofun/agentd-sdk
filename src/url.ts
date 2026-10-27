@@ -33,3 +33,14 @@ export function resolveHttpUrl(base: string = DEFAULT_URL): URL {
   url.pathname = url.pathname.slice(0, -'/ws'.length) || '/';
   return url;
 }
+
+/**
+ * The approval plane's WebSocket URL. Takes the same base URL as the client, so
+ * `http://host` becomes `ws://host/control`. A URL ending in `/ws` or `/control` works too.
+ */
+export function resolveControlUrl(base: string = DEFAULT_URL): URL {
+  const url = resolveWsUrl(base);
+  const path = url.pathname.slice(0, -'/ws'.length);
+  url.pathname = path.endsWith('/control') ? path : `${path.replace(/\/+$/, '')}/control`;
+  return url;
+}

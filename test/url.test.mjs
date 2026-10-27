@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveWsUrl } from '../dist/url.js';
+import { resolveControlUrl, resolveWsUrl } from '../dist/url.js';
 
 test('defaults to the local daemon', () => {
   assert.equal(resolveWsUrl().href, 'ws://127.0.0.1:7777/ws');
@@ -19,4 +19,13 @@ test('rejects unsupported schemes, credentials and fragments', () => {
   assert.throws(() => resolveWsUrl('http://user:pw@host'), TypeError);
   assert.throws(() => resolveWsUrl('http://host/#frag'), TypeError);
   assert.throws(() => resolveWsUrl('not a url'), TypeError);
+});
+
+test('the control URL sits next to /ws under the same base', () => {
+  assert.equal(resolveControlUrl().href, 'ws://127.0.0.1:7777/control');
+  assert.equal(resolveControlUrl('http://agentd:7777').href, 'ws://agentd:7777/control');
+  assert.equal(resolveControlUrl('https://example.com/agentd/').href, 'wss://example.com/agentd/control');
+  assert.equal(resolveControlUrl('ws://example.com/ws').href, 'ws://example.com/control');
+  assert.equal(resolveControlUrl('wss://example.com/proxy/control').href, 'wss://example.com/proxy/control');
+  assert.throws(() => resolveControlUrl('file:///tmp/x'), TypeError);
 });

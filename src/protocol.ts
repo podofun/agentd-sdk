@@ -324,6 +324,84 @@ export interface ServiceStatus {
   last_error: string | null;
 }
 
+// ---- /control: approvals ----
+
+/** An approver's answer to an `ApprovalRequest`. */
+export type Verdict = 'allow_once' | 'allow_forever' | 'deny';
+
+/** Who made the call that needs approving, as the daemon saw it. */
+export interface Caller {
+  runner: string | null;
+  /** `ws` for the daemon token, or the name of the interface whose token the client used. */
+  interface: string | null;
+  service: string | null;
+  /** The connection's `ws-<n>` id, or the `session` the client passed. */
+  session: string | null;
+  user: string | null;
+  /** Shared by everything one top-level request set off. */
+  execution?: string;
+  run_id?: string;
+  /** The chat session the run belongs to. */
+  session_id?: string;
+  /** Who answers this run's questions. */
+  approval?: ApprovalSetting;
+}
+
+interface ApprovalRequestBase {
+  /** Echo this back as `requestId` in `approvals.resolve`. */
+  id: number;
+  /** A sentence explaining why the daemon is asking. */
+  reason: string;
+  caller: Caller;
+  /** Every permission the call needs. */
+  requires: string[];
+  /** The ones not granted yet. `allow_forever` adds these to `grants.toml`. */
+  missing: string[];
+  /** The run that asks, when the call belongs to one. */
+  run_id?: string;
+  /** The chat session of that run, when it has one. */
+  session_id?: string;
+  /** Show this before letting someone pick `allow_forever`, for example when the program is an interpreter. */
+  warning?: string;
+}
+
+/** A tool or runner wants to do something it was not granted, or an action marked `confirm` is about to run. */
+export interface ActionApprovalRequest extends ApprovalRequestBase {
+  /**
+   * `missing_grant`: the tool lacks permissions. `confirm`: the action always asks.
+   * `runner_action`: the runner called an action outside its `allowed_actions`.
+   */
+  kind: 'missing_grant' | 'confirm' | 'runner_action';
+  /** The action, as `tool.action`. */
+  action: string;
+  tool: string | null;
+  /** What the call does: its arguments, or a command's `argv` and `cwd`. Secrets appear as `<secret name>`. */
+  detail?: JsonValue;
+}
+
+/** A client asked to start a chat session in a folder the user has not trusted yet. `allow_forever` trusts it for good. */
+export interface FolderApprovalRequest extends ApprovalRequestBase {
+  kind: 'folder';
+  /** The folder's real, absolute path. */
+  action: string;
+  tool: null;
+  detail: { folder: string };
+}
+
+/** A question the daemon pushes to every connected approver. Switch on `kind`. */
+export type ApprovalRequest = ActionApprovalRequest | FolderApprovalRequest;
+
+export type ApprovalKind = ApprovalRequest['kind'];
+
+export interface SubscribeResult {
+  subscribed: true;
+}
+
+export interface ResolveResult {
+  /** The request id the verdict was delivered for. */
+  resolved: number;
+}
+
 /** Hard limits the daemon enforces. The client checks the first two before sending so you get a clear error instead of a dropped socket. */
 export const LIMITS = {
   /** Largest message either side may send, in bytes. */

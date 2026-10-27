@@ -8,6 +8,13 @@ export interface ConnectionOptions {
   token?: string;
   connectTimeoutMs: number;
   timeoutMs: number;
+  /**
+   * Called for frames the daemon pushes without a request id, such as `approval.request` on `/control`.
+   * Throwing drops the connection, so only throw for a frame that is plainly broken.
+   */
+  onEvent?: (event: string, frame: Record<string, unknown>) => void;
+  /** Called when an open or opening socket goes away, with the reason pending requests were given. */
+  onDisconnect?: (error: Error) => void;
 }
 
 export interface RequestOptions {
@@ -241,6 +248,7 @@ export class Connection {
     }
     this.pending.clear();
     socket?.terminate();
+    if (socket) this.options.onDisconnect?.(error);
   }
 
   /** Give up on one request from our side. If it was a runner, also ask the daemon to stop it. */
@@ -266,6 +274,14 @@ export class Connection {
       frame = JSON.parse(text);
     } catch {
       this.disconnect(new Error('Invalid JSON from daemon'));
+      return;
+    }
+    if (isObject(frame) && typeof frame.event === 'string' && !Object.hasOwn(frame, 'id')) {
+      try {
+        this.options.onEvent?.(frame.event, frame);
+      } catch (error) {
+        this.disconnect(toError(error));
+      }
       return;
     }
     if (!isObject(frame) || !Number.isSafeInteger(frame.id)) {

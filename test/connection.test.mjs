@@ -88,6 +88,36 @@ test('malformed frames reject all pending requests', async t => {
   }
 });
 
+test('pushed events without an id go to onEvent, and a throwing handler drops the connection', async t => {
+  const seen = [];
+  const f = await fixture(
+    t,
+    (socket, req) => {
+      socket.send(JSON.stringify({ event: 'approval.request', req: { id: 1 } }));
+      socket.send(JSON.stringify({ event: 'something.new' }));
+      reply(socket, req, 'ok');
+    },
+    { overrides: { onEvent: (event, frame) => seen.push([event, frame]) } },
+  );
+  assert.equal(await f.conn.request('x', {}), 'ok');
+  assert.deepEqual(seen, [
+    ['approval.request', { event: 'approval.request', req: { id: 1 } }],
+    ['something.new', { event: 'something.new' }],
+  ]);
+
+  const disconnects = [];
+  const g = await fixture(t, socket => socket.send(JSON.stringify({ event: 'boom' })), {
+    overrides: {
+      onEvent: () => {
+        throw new Error('Broken push');
+      },
+      onDisconnect: error => disconnects.push(error.message),
+    },
+  });
+  await assert.rejects(g.conn.request('x', {}), /Broken push/);
+  assert.deepEqual(disconnects, ['Broken push']);
+});
+
 test('frames for unknown ids are ignored', async t => {
   const f = await fixture(t, (socket, req) => {
     socket.send(JSON.stringify({ id: req.id + 1000, ok: true, result: 'stray' }));
