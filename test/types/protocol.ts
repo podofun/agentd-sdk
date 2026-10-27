@@ -3,6 +3,8 @@ import type {
   AgentdClient,
   AgentdControl,
   ApprovalRequestsOptions,
+  ChangeKind,
+  FileChange,
   ApprovalRequest,
   ApprovalSetting,
   ErrorCode,
@@ -94,3 +96,17 @@ export async function badCalls(client: AgentdClient, control: AgentdControl): Pr
   // @ts-expect-error rename needs a label or null, not undefined
   await client.sessions.rename('id');
 }
+
+const change: FileChange = {
+  path: 'a.rs',
+  operation: 'modified',
+  revision: 1,
+  diff: '',
+  binary: false,
+  added: 0,
+  removed: 0,
+};
+void change;
+// @ts-expect-error renames are reported as a removal and a creation
+const renamed: ChangeKind = 'renamed';
+void renamed;
