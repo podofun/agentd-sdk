@@ -102,6 +102,29 @@ export interface ToolResultDelta {
   output?: JsonValue;
   /** Why the call failed. Only present on failure. */
   error?: string;
+  /** The files the call changed, by any means. Absent when it changed none. */
+  changes?: FileChange[];
+  /** How many more changed files were left out of `changes`. Absent when none were. */
+  more?: number;
+}
+
+/** What happened to a changed file. */
+export type ChangeKind = 'created' | 'modified' | 'removed';
+
+/** One file a tool call changed. */
+export interface FileChange {
+  /** The file's path. */
+  path: string;
+  operation: ChangeKind;
+  /** The revision in the file's history this change made, when it can be undone. */
+  revision?: number | null;
+  /** A unified diff of the change. Absent for binary files and files too large to show. */
+  diff?: string | null;
+  binary: boolean;
+  /** Lines added. */
+  added: number;
+  /** Lines removed. */
+  removed: number;
 }
 
 /** One model turn ended. The runner may start another after running tools. */
