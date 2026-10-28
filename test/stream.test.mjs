@@ -115,7 +115,7 @@ test('abort signal and timeout apply to streams', async t => {
   await assert.rejects(timed.result, /timed out/);
 });
 
-test('tool results stream through with their input, output and error', async t => {
+test('tool results stream through with their input, output, error and changed files', async t => {
   const results = [
     { type: 'tool_call', name: 'demo.token' },
     {
@@ -125,6 +125,24 @@ test('tool results stream through with their input, output and error', async t =
       output: { token: '<secret gh_token>' },
     },
     { type: 'tool_result', name: 'demo.fail', input: {}, error: 'the action failed' },
+    {
+      type: 'tool_result',
+      name: 'shell.run',
+      input: { command: ['cargo', 'fmt'] },
+      output: { exit_code: 0 },
+      changes: [
+        {
+          path: 'src/a.rs',
+          operation: 'modified',
+          revision: 2,
+          diff: '@@ -1 +1 @@\n-a\n+b\n',
+          binary: false,
+          added: 1,
+          removed: 1,
+        },
+      ],
+      more: 3,
+    },
     { type: 'turn_end' },
   ];
   const f = await fixture(t, (socket, req) => {

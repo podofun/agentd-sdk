@@ -123,7 +123,7 @@ console.log(saved.turns);
 
 Send one prompt at a time to a session. A second run that starts before the first one ends fails with `session_busy`. With `session_id`, send a `prompt` and leave out `messages`: the daemon loads the history itself.
 
-When a run fails, its exchange is not saved. A summary made before the failure stays in the history.
+When a run fails or is cancelled, the session keeps your prompt and every step that finished, followed by a note that the reply stopped early. Your next message then continues from there.
 
 ### Find and manage sessions
 
